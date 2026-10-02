@@ -121,11 +121,12 @@ function renderLive() {
     } else html += `<div class="card" style="margin-top:10px"><p class="muted">심박·α1만 모니터링합니다. 랩 버튼으로 구간을 표시할 수 있습니다.<span class="en">Monitors HR and α1 only; use Lap to mark segments.</span></p></div>`;
     // source
     html += `<h2>센서 <span class="en">Sensor</span></h2><div class="segment" id="src-seg"><button class="${L.sourceKind === 'ble' ? 'active' : ''}" data-src="ble" ${bleOk ? '' : 'disabled'}>${t('source_ble')}</button><button class="${L.sourceKind === 'demo' ? 'active' : ''}" data-src="demo">${t('source_demo')}</button><button class="${L.sourceKind === 'replay' ? 'active' : ''}" data-src="replay">${t('source_replay')}</button></div>`;
-    if (!bleOk) html += `<p class="small muted" style="margin-top:6px">이 브라우저에서는 Web Bluetooth를 쓸 수 없습니다 (Android Chrome 필요). / Web Bluetooth unavailable here (needs Android Chrome).</p>`;
+    html += `<p class="small" id="ble-diag" style="margin-top:6px"></p>`;
     if (L.sourceKind === 'demo') html += `<div class="card" style="margin-top:10px"><label class="field">${t('demo_speed')}<select id="demo-speed">${[1, 5, 10, 30, 60].map(s => `<option value="${s}" ${L.demoSpeed === s ? 'selected' : ''}>×${s}</option>`).join('')}</select></label><p class="small muted">가상 스트랩이 프로토콜을 따라 심박·α1을 만들어냅니다. 젖산은 직접 입력하세요(연습용 값: 1.0 → 1.2 → 1.5 → 2.0 → 3.0 → 4.5 → 7).<span class="en">A virtual strap follows the protocol; type lactate values yourself (practice: 1.0 → 1.2 → 1.5 → 2.0 → 3.0 → 4.5 → 7).</span></p></div>`;
     if (L.sourceKind === 'replay') html += `<div class="card" style="margin-top:10px"><div class="row"><button data-action="pick-replay">${t('replay_pick')}</button><span class="small muted">${L.replay ? esc(L.replay.filename) + ` · ${L.replay.rr.length} RR · ${fmtClock(L.replay.durationSec)}` : 'FatMaxxer rr.csv'}</span></div><label class="field" style="margin-top:8px">${t('demo_speed')}<select id="replay-speed">${[1, 5, 10, 30, 60].map(s => `<option value="${s}" ${L.replaySpeed === s ? 'selected' : ''}>×${s}</option>`).join('')}</select></label></div>`;
     const connected = A.source && (A.source.status === 'connected');
     html += `<div class="grid2" style="margin-top:14px"><button class="big ${connected ? '' : 'primary'}" data-action="connect" ${connected ? 'disabled' : ''}>${connected ? t('connected') : t('connect')}</button><button class="big ${connected ? 'primary' : ''}" data-action="start" ${connected ? '' : 'disabled'}>${t('start')}</button></div>
+      ${A.lastBleError ? `<p class="notice warn small" style="margin-top:10px">${esc(A.lastBleError)}</p>` : ''}
       <div class="stats" style="margin-top:10px"><div>${t('hr')}<b id="pre-hr">${v.hr ?? '–'}</b></div><div>RR<b id="pre-rr">${v.samples}</b></div><div>${t('battery')}<b id="pre-batt">${A.source?.battery != null ? A.source.battery + '%' : '–'}</b></div><div>상태<b id="pre-status" style="font-size:0.8rem">${esc(v.source.status)}</b></div></div>`;
     return html;
   }
@@ -146,6 +147,7 @@ function renderLive() {
 function mountLive() {
   const eng = ensureEngine(); const v = eng.view();
   if (v.state === 'running') { const el = $('#lv-chart'); if (el) { A.live.chart = liveChart(el, { getBand: () => eng.targets ? [eng.targets.hrLo, eng.targets.hrHi] : null }); A.charts.push(A.live.chart); } updateLive(v); }
+  const diag = $('#ble-diag'); if (diag) bleDiagnostics().then(txt => { diag.innerHTML = txt; });
   const ms = $('#mode-seg'); if (ms) ms.addEventListener('click', e => { const b = e.target.closest('button'); if (b) { A.live.mode = b.dataset.mode; render(); } });
   const ss = $('#src-seg'); if (ss) ss.addEventListener('click', e => { const b = e.target.closest('button'); if (b && !b.disabled) { A.live.sourceKind = b.dataset.src; if (A.source && A.source.kind !== b.dataset.src) { A.source.disconnect(); A.source = null; } render(); } });
   const ds = $('#demo-speed'); if (ds) ds.onchange = () => { A.live.demoSpeed = +ds.value; };
@@ -212,6 +214,22 @@ function openLactateModal(stageIdx) {
 function openRpeModal(stageIdx) {
   modal(`<h3>${t('rpe_entry')}${stageIdx != null ? ` — ${tx('stage')} ${stageIdx}` : ''}</h3><div class="rpe">${[6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20].map(r => `<button data-r="${r}">${r}</button>`).join('')}</div><p class="small muted" style="margin-top:8px">6 아주 편함 · 11 가벼움 · 13 약간 힘듦 · 15 힘듦 · 17 매우 힘듦 · 19 극도<span class="en">6 very easy · 11 light · 13 somewhat hard · 15 hard · 17 very hard · 19 extremely hard</span></p><button class="ghost block" data-x="skip" style="margin-top:8px">${t('skip')}</button>`, (m, close) => { m.querySelector('.rpe').addEventListener('click', ev => { const b = ev.target.closest('button'); if (!b) return; A.engine.enterRpe(+b.dataset.r, stageIdx); close(); }); m.querySelector('[data-x=skip]').onclick = close; });
 }
+async function bleDiagnostics() {
+  const ua = navigator.userAgent; const samsung = /SamsungBrowser/i.test(ua); const chrome = /Chrome\/(\d+)/.exec(ua);
+  if (!window.isSecureContext) return `<span style="color:var(--bad)">HTTPS가 아니라 블루투스를 쓸 수 없습니다. / Not a secure (HTTPS) page.</span>`;
+  if (!navigator.bluetooth) return `<span style="color:var(--bad)">이 브라우저는 Web Bluetooth를 지원하지 않습니다${samsung ? ' (삼성 인터넷)' : ''}. 같은 주소를 <b>Chrome</b>으로 여세요.<span class="en">This browser has no Web Bluetooth${samsung ? ' (Samsung Internet)' : ''} — open the same address in <b>Chrome</b>.</span></span>`;
+  let avail = null; try { avail = await navigator.bluetooth.getAvailability(); } catch (e) { avail = null; }
+  if (avail === false) return `<span style="color:var(--warn)">폰의 블루투스가 꺼져 있습니다. 켠 뒤 다시 시도하세요. / Phone Bluetooth is off.</span>`;
+  return `<span class="muted">Web Bluetooth 사용 가능${chrome ? ' · Chrome ' + chrome[1] : ''} · H10은 <b>착용하고 전극을 적셔야</b> 목록에 나타납니다. / Web Bluetooth OK — the H10 advertises only when worn with wet electrodes.</span>`;
+}
+function bleErrorHint(e) {
+  const n = e && e.name;
+  if (n === 'NotFoundError') return '목록에 H10이 없거나 선택을 취소했습니다. 스트랩을 착용하고 전극을 적신 뒤(H10은 착용해야 켜짐), FatMaxxer·Polar Flow·Polar Beat·Train.Red 등 다른 앱의 H10 연결을 끊고 다시 시도하세요. / H10 not listed or cancelled: wear the strap with wet electrodes and disconnect it from other apps (FatMaxxer, Polar Flow/Beat, Train.Red), then retry.';
+  if (n === 'SecurityError') return '블루투스 권한이 차단되었습니다. 폰 설정 → 애플리케이션 → Chrome → 권한 → 근처 기기(및 위치) 허용, Chrome 주소창 자물쇠 → 권한 → 블루투스 허용 후 다시 시도. / Bluetooth permission blocked: Phone Settings → Apps → Chrome → Permissions → Nearby devices (and Location) → Allow; then lock icon → Permissions → Bluetooth → Allow.';
+  if (n === 'NetworkError') return '연결은 됐지만 바로 끊겼습니다. H10을 다시 착용하고(전극 적시기), 다른 앱 연결을 끊은 뒤 재시도하세요. / Connected then dropped: re-seat the strap, disconnect other apps, retry.';
+  if (n === 'NotSupportedError') return '이 기기/브라우저는 Web Bluetooth를 지원하지 않습니다. Android Chrome에서 여세요. / Web Bluetooth not supported here — use Android Chrome.';
+  return (e && e.message) || String(e);
+}
 async function connectSource() {
   const L = A.live; ensureEngine(); A.alerts.unlock();
   try {
@@ -224,8 +242,8 @@ async function connectSource() {
     src.on('status', () => { updateConnChip(); if (A.view === 'live' && A.engine.state !== 'running') render(); });
     src.on('battery', () => updateLive(A.engine.view()));
     await src.connect();
-    toast(tx('connected'));
-  } catch (e) { console.error(e); A.source = null; toast((e && e.name === 'NotFoundError') ? '기기를 선택하지 않았습니다 / No device selected' : `연결 실패 / Failed: ${e.message || e}`); render(); }
+    A.lastBleError = null; toast(tx('connected'));
+  } catch (e) { console.error(e); A.source = null; A.lastBleError = `${e && e.name ? e.name + ': ' : ''}${bleErrorHint(e)}`; toast(`연결 실패 / Failed: ${e && e.name ? e.name : ''}`, 3000); render(); }
 }
 async function startSession() {
   const eng = ensureEngine(); const L = A.live; const z = zonesObj();
