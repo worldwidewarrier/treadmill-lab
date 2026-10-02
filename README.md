@@ -29,6 +29,18 @@ EN: Sign in to GitHub → New repository `treadmill-lab` (Public) → "uploading
 
 EN: Check Settings → practise with Session → Step test → Demo ×10 → import your FatMaxxer `rr.csv` and Train.Red exports in Analysis → on test day follow the checklist at the bottom of Settings.
 
+
+## 2b. 혼자 할 때 — 젖산을 시작/끝에만 찍을 수 있다면 · Solo use: lactate only at start/end
+
+**권장 조합 (α1 기준 + 젖산 검증):**
+1. **연속 단계 테스트(α1 전용)**: 설정 → 프로토콜 → 채혈 초 = `0`. 정지 없이 3분 단계가 이어지고 HRVT1/HRVT2(α1 0.75/0.5)가 나옵니다. 시작 전·종료 직후 젖산은 참고용으로 기록.
+2. **검증 세션**: 세션 탭에서 LT1(또는 LT2) 세션을 열고 **러닝머신 속도**를 입력 → 일정 속도로 25–30분 → 끝나고 젖산 한 방울 → 「젖산 입력」. 분석 화면의 **젖산 검증** 카드가 판정합니다.
+   - LT1 세션: 종료 젖산 ≤ 2.0 (안정 시 +1.0 이내) → LT1 아래 ✓ · 2.0–2.5 → 목표 −2 bpm · > 2.5 → 목표 −4 bpm 후 재검증
+   - LT2 세션(MLSS): 30분 일정 속도, **10분과 30분** 두 번 채혈 → 상승 ≤ 1.0 mmol/L → MLSS 이하 ✓(다음 +0.3 km/h) · > 1.0 → 0.3–0.5 km/h 낮추기
+3. **다일 젖산 곡선**: 다른 날 다른 속도(예 8·9·10·11·12 km/h)로 검증 세션을 쌓으면 분석 탭이 종료 젖산–속도–심박 곡선을 만들어 LT1/LT2를 계산합니다(3점부터, 5점 이상 B등급). 러닝머신을 멈출 필요가 없고 안정 상태 생리에 더 가깝습니다.
+
+EN: Set sampling pause to 0 for a continuous α1-only step test (HRVT1/2). Then run constant-speed **verification sessions** with the treadmill speed entered and one end-of-run lactate sample: LT1 runs → end ≤ 2.0 mmol/L confirms; LT2 runs → sample at 10 and 30 min, a rise ≤ 1.0 confirms MLSS. Several such runs at different speeds form the **multi-day lactate curve** in Analysis, which yields LT1/LT2 without ever stopping mid-run.
+
 ## 3. 장비 연결 방식 · How each device connects
 
 | 장비 | 실시간 | 방법 |

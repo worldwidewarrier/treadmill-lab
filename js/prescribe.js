@@ -1,4 +1,5 @@
-// Zones, weekly plan, progression, auto-adjustments and rule-based summaries (KO/EN).
+// Zones, weekly plan, progression, auto-adjustments, lactate verification runs and rule-based summaries (KO/EN).
+import { analyzeLactate } from './lactate.js';
 const r1 = v => Math.round(v * 10) / 10;
 const mean = a => a.length ? a.reduce((s, v) => s + v, 0) / a.length : NaN;
 
@@ -144,4 +145,71 @@ export function claudeSummary({ profile, zones, session, metrics, analysis, plan
   if (plan) L.push(`Plan week ${plan.week}${plan.recovery ? ' (recovery)' : ''}: ` + plan.days.map(d => `${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.day]} ${d.en} ${d.minutes}min`).join('; '));
   L.push('Question: please interpret this session and suggest adjustments. (DFA α1: 0.75 ≈ aerobic threshold, 0.5 ≈ anaerobic threshold; lactate is the anchor.)');
   return L.join('\n');
+}
+
+
+// ---------- Lactate verification runs (solo-friendly: samples only at rest / ~10 min / end) ----------
+/** Derive {rest, mid, end} lactate from logged events by timing; explicit session.lactateChecks wins. */
+export function lactateChecks(session) {
+  const out = { rest: null, mid: null, end: null, ...(session.lactateChecks || {}) };
+  const t0 = session.startedAt, t1 = session.endedAt || t0; const dur = (t1 - t0) / 1000;
+  for (const e of session.events || []) {
+    if (e.type !== 'lactate' || !Number.isFinite(e.value)) continue;
+    const rel = (e.t - t0) / 1000;
+    if (rel <= 240 && out.rest == null) out.rest = e.value;
+    else if (rel >= dur - 300 || rel >= dur * 0.85) { if (out.end == null) out.end = e.value; }
+    else if (out.mid == null) out.mid = e.value;
+  }
+  return out;
+}
+/** Mean HR / α1 over the last `sec` seconds of a session (steady-state end). */
+export function endWindowStats(session, sec = 300) {
+  const t1 = session.endedAt || (session.hrLive?.length ? session.hrLive[session.hrLive.length - 1][0] : null); if (!t1) return { hr: NaN, alpha1: NaN };
+  const hr = (session.hrLive || []).filter(p => p[0] >= t1 - sec * 1000 && p[1] > 0).map(p => p[1]);
+  const a1 = (session.features || []).filter(f => f.t >= t1 - sec * 1000 && Number.isFinite(f.alpha1) && !f.paused).map(f => f.alpha1);
+  return { hr: mean(hr), alpha1: mean(a1) };
+}
+/**
+ * Verdict for a constant-load session with end (and optional rest / 10-min) lactate.
+ * LT1 runs: end ≤ 2.0 (and ≤ rest+1.0) → below LT1. LT2 runs (MLSS logic): Δ(mid→end) ≤ 1.0 → at/below MLSS.
+ */
+export function lactateVerdict(session) {
+  const c = lactateChecks(session); const sp = session.speed; const type = session.type;
+  if (c.end == null) return null;
+  const spTxt = Number.isFinite(sp) ? ` @ ${sp} km/h` : '';
+  const rise = c.rest != null ? c.end - c.rest : null; const delta = c.mid != null ? c.end - c.mid : null;
+  if (type === 'lt2' || (type === 'free' && c.end >= 3)) {
+    if (delta != null) {
+      if (delta <= 1.0 && c.end < 8) return { level: 'ok', adjust: { lt2Speed: +0.3 }, ko: `MLSS 이하 확인${spTxt}: 10분→종료 상승 ${delta.toFixed(1)} mmol/L (≤1.0). 다음 검증은 +0.3 km/h.`, en: `At/below MLSS${spTxt}: 10-min→end rise ${delta.toFixed(1)} mmol/L (≤1.0). Next verification +0.3 km/h.` };
+      return { level: 'high', adjust: { lt2Speed: -0.4 }, ko: `MLSS 초과${spTxt}: 10분→종료 상승 ${delta.toFixed(1)} mmol/L (>1.0). LT2 속도를 0.3~0.5 km/h 낮추세요.`, en: `Above MLSS${spTxt}: rise ${delta.toFixed(1)} mmol/L (>1.0). Lower the LT2 speed by 0.3–0.5 km/h.` };
+    }
+    if (c.end >= 6) return { level: 'high', adjust: { lt2Speed: -0.4 }, ko: `종료 젖산 ${c.end} — LT2 위일 가능성${spTxt}. 10분 샘플을 추가하면 판정이 확실해집니다.`, en: `End lactate ${c.end} — likely above LT2${spTxt}. Add a 10-min sample next time for a firm call.` };
+    if (c.end < 3) return { level: 'low', adjust: { lt2Speed: +0.3 }, ko: `종료 젖산 ${c.end} — LT2 아래${spTxt}. 다음엔 +0.3 km/h.`, en: `End lactate ${c.end} — below LT2${spTxt}. Try +0.3 km/h next time.` };
+    return { level: 'near', adjust: null, ko: `종료 젖산 ${c.end} — LT2 근처${spTxt}. 안정 상태 확인에는 10분 샘플이 필요합니다.`, en: `End lactate ${c.end} — near LT2${spTxt}. A 10-min sample is needed to confirm steady state.` };
+  }
+  // LT1 / easy runs
+  const tooHigh = c.end > 2.5 || (rise != null && rise > 1.5);
+  const border = !tooHigh && (c.end > 2.0 || (rise != null && rise > 1.0));
+  if (tooHigh) return { level: 'high', adjust: { lt1Hr: -4 }, ko: `종료 젖산 ${c.end}${rise != null ? ` (안정 시 +${rise.toFixed(1)})` : ''} — LT1 위${spTxt}. 목표 심박 −4 bpm 후 재검증.`, en: `End lactate ${c.end}${rise != null ? ` (+${rise.toFixed(1)} over rest)` : ''} — above LT1${spTxt}. Target HR −4 bpm, then verify again.` };
+  if (border) return { level: 'near', adjust: { lt1Hr: -2 }, ko: `종료 젖산 ${c.end} — LT1 경계${spTxt}. 목표 심박 −2 bpm.`, en: `End lactate ${c.end} — borderline LT1${spTxt}. Target HR −2 bpm.` };
+  return { level: 'ok', adjust: null, ko: `종료 젖산 ${c.end}${rise != null ? ` (안정 시 +${rise.toFixed(1)})` : ''} — LT1 아래 확인${spTxt}.`, en: `End lactate ${c.end}${rise != null ? ` (+${rise.toFixed(1)} over rest)` : ''} — below LT1 confirmed${spTxt}.` };
+}
+/** Multi-day lactate curve: constant-speed sessions (last `days`) with an end sample → lactate vs speed (+ end-HR). */
+export function multiDayCurve(sessions, { days = 60, incline = null } = {}) {
+  const now = Date.now(); const pts = [];
+  for (const s of sessions) {
+    if (s.type === 'test' || !s.final || !Number.isFinite(s.speed)) continue;
+    if (now - s.startedAt > days * 86400000) continue;
+    if (incline != null && Number.isFinite(s.incline) && Math.abs(s.incline - incline) > 0.6) continue;
+    const c = lactateChecks(s); if (c.end == null) continue;
+    const w = endWindowStats(s, 300);
+    pts.push({ x: s.speed, la: c.end, hr: w.hr, alpha1: w.alpha1, id: s.id, date: s.startedAt, incline: s.incline });
+  }
+  // one point per speed: keep the most recent
+  const bySpeed = new Map(); for (const p of pts.sort((a, b) => a.date - b.date)) bySpeed.set(p.x, p);
+  const points = [...bySpeed.values()].sort((a, b) => a.x - b.x);
+  const analysis = points.length >= 3 ? analyzeLactate(points.map(p => ({ x: p.x, la: p.la, hr: p.hr }))) : null;
+  const span = points.length ? Math.max(...points.map(p => p.la)) - Math.min(...points.map(p => p.la)) : 0;
+  const grade = points.length >= 5 && span >= 2 ? 'B' : points.length >= 3 ? 'C' : '-';
+  return { points, analysis, grade };
 }

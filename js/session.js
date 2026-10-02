@@ -45,8 +45,8 @@ export class SessionEngine {
     this.lastTick = 0; this.paused = false; this.pauseAccum = 0; this.pauseStartedAt = 0;
   }
   now() { return this.source && this.source.now ? this.source.now() : Date.now(); }
-  configure({ mode, protocol, intervals, targets }) {
-    if (mode) this.mode = mode; if (protocol) this.protocol = { ...this.protocol, ...protocol }; if (intervals) this.intervals = { ...this.intervals, ...intervals }; if (targets) this.targets = targets;
+  configure({ mode, protocol, intervals, targets, meta }) {
+    if (mode) this.mode = mode; if (protocol) this.protocol = { ...this.protocol, ...protocol }; if (intervals) this.intervals = { ...this.intervals, ...intervals }; if (targets) this.targets = targets; if (meta) this.meta = { ...meta };
     this.plan = this.mode === 'test' ? buildStages(this.protocol, this.settings.treadmill) : [];
     this.onUpdate(this.view());
   }
@@ -107,7 +107,11 @@ export class SessionEngine {
   }
   endStageWork(now) {
     const st = this.stages[this.stageIdx]; if (!st || st.tEnd) return;
-    st.tEnd = now; this.setPhase('pause', now); this.pendingLactate = st.idx;
+    st.tEnd = now;
+    if (!(this.protocol.pauseSec > 0)) { // continuous (α1-only) test: no sampling pause, straight into the next stage
+      st.tPauseEnd = now; if (this.stopAdvised) { this.setPhase('done', now); return; } this.beginStage(this.stageIdx + 1, now); return;
+    }
+    this.setPhase('pause', now); this.pendingLactate = st.idx;
     this.alerts?.cue(VOICE.stage_end(), { beep: 'triple', vib: [500, 200, 500] });
     this.onEvent({ type: 'lactate-prompt', stage: st.idx });
   }
@@ -200,7 +204,7 @@ export class SessionEngine {
     return {
       id: this.sessionId, type: this.mode, startedAt: this.startedAt, endedAt: final ? this.endedAt : null, final: !!final,
       sourceKind: this.source?.kind || 'unknown', protocol: this.mode === 'test' ? { ...this.protocol } : null, intervals: this.mode === 'lt2' ? { ...this.intervals } : null, targets: this.targets,
-      alpha1Settings: { ...(this.settings.alpha1 || {}) },
+      alpha1Settings: { ...(this.settings.alpha1 || {}) }, speed: this.meta?.speed ?? null, incline: this.meta?.incline ?? null,
       rr: this.rr, features: this.features, hrLive: this.hrLive, stages: this.stages.map(s => ({ ...s })), events: this.events, tiz: { ...this.tiz }, pauseMs: this.pauseAccum,
     };
   }

@@ -6,7 +6,7 @@ import { HeartRateSource } from './ble.js';
 import { ReplaySource, DemoSource, demoProfileForEngine } from './sources.js';
 import { SessionEngine, DEFAULT_PROTOCOL, DEFAULT_INTERVALS, buildStages, computeFeaturesOffline } from './session.js';
 import { analyzeSession, summarizeStages } from './analysis.js';
-import { computeZones, sessionTargets, weeklyPlan, lt2Structure, sessionMetrics, assessRecent, sessionSummaryText, claudeSummary } from './prescribe.js';
+import { computeZones, sessionTargets, weeklyPlan, lt2Structure, sessionMetrics, assessRecent, sessionSummaryText, claudeSummary, lactateChecks, lactateVerdict, multiDayCurve, endWindowStats } from './prescribe.js';
 import { importFile } from './importers.js';
 import { liveChart, timelineChart, stepTestChart, trendChart } from './charts.js';
 
@@ -112,13 +112,16 @@ function renderLive() {
     } else if (L.mode === 'lt1') {
       const T = z ? sessionTargets(z, 'lt1', { minutes: L.minutes }) : null;
       html += `<div class="card" style="margin-top:10px"><h3>${t('mode_lt1')}</h3>${T ? `<p>${t('target')}: <b class="mono">${T.hrLo}–${T.hrHi} bpm</b> · α1 ≥ 0.75${Number.isFinite(T.speedLo) ? ` · ≈ ${n1(T.speedLo)}–${n1(T.speedHi)} km/h` : ''}</p>` : `<p class="muted">${t('no_zones')}</p>`}
-        <label class="field">${t('duration')} (min)<input type="number" id="lt1-min" value="${L.minutes}" min="10" max="300" step="5"></label></div>`;
+        <div class="grid3"><label class="field">${t('duration')} (min)<input type="number" id="lt1-min" value="${L.minutes}" min="10" max="300" step="5"></label><label class="field">러닝머신 km/h<input type="number" id="sess-speed" step="0.1" value="${L.speed ?? (T && Number.isFinite(T.speedLo) ? ((T.speedLo + T.speedHi) / 2).toFixed(1) : '')}"></label><label class="field">경사 %<input type="number" id="sess-incline" step="0.5" value="${L.incline ?? A.settings.protocol.incline}"></label></div>
+        <p class="small muted">속도를 적어 두면 종료 시 젖산 한 방울로 "검증 세션"이 됩니다(혼자 측정용). <span class="en">Enter the treadmill speed so an end-of-run lactate sample turns this into a verification run.</span></p></div>`;
     } else if (L.mode === 'lt2') {
       const T = z ? sessionTargets(z, 'lt2') : null; const st = L.lt2 || lt2Structure(planWeek()) || { reps: 4, workSec: 480, restSec: 180, warmupSec: 600, cooldownSec: 360 }; L.lt2 = st;
       html += `<div class="card" style="margin-top:10px"><h3>${t('mode_lt2')}</h3>${T ? `<p>${t('target')}: <b class="mono">${T.hrLo}–${T.hrHi} bpm</b>${Number.isFinite(T.speedLo) ? ` · ≈ ${n1(T.speedLo)}–${n1(T.speedHi)} km/h` : ''}</p>` : `<p class="muted">${t('no_zones')}</p>`}
         <div class="grid3"><label class="field">반복 / reps<input type="number" id="lt2-reps" value="${st.reps}" min="1" max="10"></label><label class="field">운동 / work (min)<input type="number" id="lt2-work" value="${st.workSec / 60}" min="1" max="60"></label><label class="field">회복 / rest (min)<input type="number" id="lt2-rest" value="${st.restSec / 60}" min="0" max="15"></label></div>
-        <div class="grid2" style="margin-top:8px"><label class="field">${t('warmup')} (min)<input type="number" id="lt2-wu" value="${st.warmupSec / 60}" min="0" max="30"></label><label class="field">쿨다운 / cool-down (min)<input type="number" id="lt2-cd" value="${st.cooldownSec / 60}" min="0" max="30"></label></div></div>`;
-    } else html += `<div class="card" style="margin-top:10px"><p class="muted">심박·α1만 모니터링합니다. 랩 버튼으로 구간을 표시할 수 있습니다.<span class="en">Monitors HR and α1 only; use Lap to mark segments.</span></p></div>`;
+        <div class="grid2" style="margin-top:8px"><label class="field">${t('warmup')} (min)<input type="number" id="lt2-wu" value="${st.warmupSec / 60}" min="0" max="30"></label><label class="field">쿨다운 / cool-down (min)<input type="number" id="lt2-cd" value="${st.cooldownSec / 60}" min="0" max="30"></label></div>
+        <div class="grid2" style="margin-top:8px"><label class="field">인터벌 속도 km/h<input type="number" id="sess-speed" step="0.1" value="${L.speed ?? (T && Number.isFinite(T.speedHi) ? T.speedHi : '')}"></label><label class="field">경사 %<input type="number" id="sess-incline" step="0.5" value="${L.incline ?? A.settings.protocol.incline}"></label></div>
+        <p class="small muted">MLSS 검증: 1회 반복을 30분으로 두고 10분·30분에 젖산을 찍으면 상승폭(≤1.0)으로 LT2를 확인합니다. <span class="en">MLSS check: use one 30-min rep with lactate at 10 and 30 min; a rise ≤1.0 mmol/L confirms LT2.</span></p></div>`;
+    } else html += `<div class="card" style="margin-top:10px"><p class="muted">심박·α1만 모니터링합니다. 랩 버튼으로 구간을 표시할 수 있습니다.<span class="en">Monitors HR and α1 only; use Lap to mark segments.</span></p><div class="grid2"><label class="field">러닝머신 km/h<input type="number" id="sess-speed" step="0.1" value="${L.speed ?? ''}"></label><label class="field">경사 %<input type="number" id="sess-incline" step="0.5" value="${L.incline ?? A.settings.protocol.incline}"></label></div></div>`;
     // source
     html += `<h2>센서 <span class="en">Sensor</span></h2><div class="segment" id="src-seg"><button class="${L.sourceKind === 'ble' ? 'active' : ''}" data-src="ble" ${bleOk ? '' : 'disabled'}>${t('source_ble')}</button><button class="${L.sourceKind === 'demo' ? 'active' : ''}" data-src="demo">${t('source_demo')}</button><button class="${L.sourceKind === 'replay' ? 'active' : ''}" data-src="replay">${t('source_replay')}</button></div>`;
     html += `<p class="small" id="ble-diag" style="margin-top:6px"></p>`;
@@ -153,6 +156,8 @@ function mountLive() {
   const ds = $('#demo-speed'); if (ds) ds.onchange = () => { A.live.demoSpeed = +ds.value; };
   const rs = $('#replay-speed'); if (rs) rs.onchange = () => { A.live.replaySpeed = +rs.value; };
   const lm = $('#lt1-min'); if (lm) lm.onchange = () => { A.live.minutes = +lm.value; };
+  const sp = $('#sess-speed'); if (sp) sp.onchange = () => { A.live.speed = sp.value === '' ? null : +sp.value; };
+  const si = $('#sess-incline'); if (si) si.onchange = () => { A.live.incline = si.value === '' ? null : +si.value; };
   for (const [id, key, mul] of [['lt2-reps', 'reps', 1], ['lt2-work', 'workSec', 60], ['lt2-rest', 'restSec', 60], ['lt2-wu', 'warmupSec', 60], ['lt2-cd', 'cooldownSec', 60]]) { const el = document.getElementById(id); if (el) el.onchange = () => { A.live.lt2[key] = +el.value * mul; }; }
 }
 let liveStageSig = '';
@@ -254,7 +259,8 @@ async function startSession() {
   if (L.mode === 'lt1') { if (!z) { toast(tx('no_zones')); return; } targets = sessionTargets(z, 'lt1', { minutes: L.minutes, lt1Adjust: ins.lt1Adjust }); }
   if (L.mode === 'lt2') { if (!z) { toast(tx('no_zones')); return; } targets = sessionTargets(z, 'lt2'); }
   eng.reset(); if (eng.source !== A.source) eng.setSource(A.source);
-  eng.configure({ mode: L.mode, protocol: A.settings.protocol, intervals: L.mode === 'lt2' ? L.lt2 : null, targets });
+  const spEl = $('#sess-speed'), siEl = $('#sess-incline'); if (spEl) L.speed = spEl.value === '' ? null : +spEl.value; if (siEl) L.incline = siEl.value === '' ? null : +siEl.value;
+  eng.configure({ mode: L.mode, protocol: A.settings.protocol, intervals: L.mode === 'lt2' ? L.lt2 : null, targets, meta: L.mode === 'test' ? null : { speed: L.speed ?? null, incline: L.incline ?? A.settings.protocol.incline } });
   if (A.source.kind === 'demo') A.source.profile = demoProfileForEngine(eng);
   liveStageSig = ''; eng.start();
   const ok = await A.alerts.keepAwake(true); if (!ok) toast(tx('keep_awake_fail'), 4000);
@@ -290,6 +296,15 @@ async function renderAnalysisList() {
   if (tests.length) { html += `<h2>${t('tests')}</h2><div class="card">` + tests.map(s => itemHtml(s)).join('') + '</div>'; }
   if (tests.filter(s => s.result && Number.isFinite(s.result.lt1Hr)).length >= 2) html += `<div class="card" style="margin-top:10px;padding:8px 6px 4px"><div class="chart" id="trend-chart"></div></div>`;
   if (others.length) { html += `<h2>${t('mode_lt1')} / ${t('mode_lt2')} / ${t('mode_free')}</h2><div class="card">` + others.map(s => itemHtml(s)).join('') + '</div>'; }
+  // multi-day lactate curve from verification runs
+  const md = multiDayCurve(await store.listSessions(), { days: 60 }); A.multiDay = md;
+  if (md.points.length) {
+    html += `<h2>다일 젖산 곡선 <span class="en">Multi-day lactate curve</span></h2><div class="card"><p class="small muted">일정 속도 세션의 종료 젖산을 모아 만든 곡선(최근 60일, 속도당 최신 1개). <span class="en">End-of-run lactate from constant-speed sessions (last 60 days, newest per speed).</span></p>
+      <div class="table-wrap"><table><thead><tr><th>km/h</th><th>La</th><th>HR</th><th>α1</th><th>날짜</th></tr></thead><tbody>${md.points.map(p => `<tr><td>${p.x}</td><td>${p.la}</td><td>${n0(p.hr)}</td><td>${n2(p.alpha1)}</td><td>${fmtDate(p.date).slice(5, 10)}</td></tr>`).join('')}</tbody></table></div>`;
+    if (md.analysis) { const L1 = md.analysis.lt1Primary, L2 = md.analysis.lt2Primary; html += `<div class="thr-card" style="margin-top:10px"><div class="box"><div class="small muted">LT1 (baseline+0.5)</div><div class="v">${n0(L1.hr)}<small> bpm</small></div><div class="small">${n1(L1.x)} km/h</div></div><div class="box"><div class="small muted">LT2 (ModDmax)</div><div class="v">${n0(L2.hr)}<small> bpm</small></div><div class="small">${n1(L2.x)} km/h</div></div></div><p class="small muted" style="margin-top:6px">${t('grade')} ${md.grade} · ${md.points.length}점${md.points.length < 5 ? ' — 5점 이상(젖산 범위 2 mmol/L 이상)이면 B등급' : ''}</p><button class="primary block" style="margin-top:8px" data-action="apply-multiday" ${Number.isFinite(L1.hr) && Number.isFinite(L2.hr) ? '' : 'disabled'}>${t('apply_zones')}</button>`; }
+    else html += `<p class="small muted" style="margin-top:6px">${md.points.length}/3 — 서로 다른 속도 3개 이상이면 곡선을 계산합니다. <span class="en">Need ≥3 different speeds to fit the curve.</span></p>`;
+    html += '</div>';
+  }
   if (A.imports.length) { html += `<h2>${t('imports')}</h2><div class="card">` + A.imports.map(i => `<div class="list-item" data-action="import-detail" data-id="${i.id}"><div><div class="t">${esc(i.filename || i.source)}</div><div class="s">${esc(i.source)} · ${i.startedAt ? fmtDate(i.startedAt) : ''} · ${i.durationSec ? fmtClock(i.durationSec) : ''}${i.meta?.position ? ' · ' + esc(i.meta.position) : ''}</div></div><button class="compact ghost danger" data-action="delete-import" data-id="${i.id}">✕</button></div>`).join('') + '</div>'; }
   setTimeout(() => { const el = $('#trend-chart'); if (el) { const tt = tests.filter(s => s.result && Number.isFinite(s.result.lt1Hr)).slice().reverse(); const c = trendChart(el, { labels: tt.map(s => fmtDate(s.startedAt).slice(5, 10)), lt1: tt.map(s => s.result.lt1Hr), lt2: tt.map(s => s.result.lt2Hr ?? null) }); A.charts.push(c); } }, 0);
   return html;
@@ -306,6 +321,15 @@ async function renderSessionDetail(id) {
       <p style="margin-top:10px"><span class="ko">${esc(txt.ko)}</span><span class="en">${esc(txt.en)}</span></p></div>
     <div class="card" style="margin-top:10px;padding:8px 6px 4px"><div class="chart" id="tl-chart"></div></div>
     <div class="row" style="margin-top:10px"><button class="compact" data-action="attach-smo2">${t('attach_smo2')}</button>${s.smo2 ? `<label class="field grow">${t('offset')} (s) <input type="number" id="smo2-offset" value="${Math.round((s.smo2.offsetMs || 0) / 1000)}" step="5"></label>` : ''}<button class="compact" data-action="copy-summary">${t('copy_summary')}</button></div>`;
+  if (s.type !== 'test') {
+    const c = lactateChecks(s); const vd = lactateVerdict(s); const ew = endWindowStats(s, 300);
+    html += `<h2>젖산 검증 <span class="en">Lactate verification</span></h2><div class="card">
+      <div class="grid2"><label class="field">러닝머신 km/h<input type="number" step="0.1" id="vc-speed" value="${s.speed ?? ''}"></label><label class="field">경사 %<input type="number" step="0.5" id="vc-incline" value="${s.incline ?? ''}"></label></div>
+      <div class="grid3" style="margin-top:8px"><label class="field">안정 시 / rest<input type="number" step="0.1" id="vc-rest" value="${c.rest ?? ''}"></label><label class="field">10분 / mid<input type="number" step="0.1" id="vc-mid" value="${c.mid ?? ''}"></label><label class="field">종료 / end<input type="number" step="0.1" id="vc-end" value="${c.end ?? ''}"></label></div>
+      <p class="small muted" style="margin-top:6px">마지막 5분 평균: 심박 ${n0(ew.hr)} bpm · α1 ${n2(ew.alpha1)} <span class="en">Last-5-min mean: HR ${n0(ew.hr)} · α1 ${n2(ew.alpha1)}</span></p>
+      ${vd ? `<div class="notice ${vd.level === 'ok' ? '' : 'warn'}" style="margin-top:6px"><span class="ko">${esc(vd.ko)}</span><span class="en">${esc(vd.en)}</span></div>${vd.adjust ? `<button class="compact" style="margin-top:8px" data-action="apply-verdict">조정 적용 (${vd.adjust.lt1Hr ? `LT1 ${vd.adjust.lt1Hr > 0 ? '+' : ''}${vd.adjust.lt1Hr} bpm` : ''}${vd.adjust.lt2Speed ? `LT2 ${vd.adjust.lt2Speed > 0 ? '+' : ''}${vd.adjust.lt2Speed} km/h` : ''}) <span class="en">Apply adjustment</span></button>` : ''}` : `<p class="small muted">종료 젖산을 입력하면 LT1/LT2 판정이 나옵니다. 세션 중 「젖산 입력」으로 기록한 값은 시각에 따라 자동 배치됩니다. <span class="en">Enter the end lactate to get a verdict; values logged during the session are placed automatically by time.</span></p>`}
+    </div>`;
+  }
   const evs = (s.events || []).filter(e => ['lactate', 'rpe', 'lap'].includes(e.type) && (s.type !== 'test' || e.type === 'lap'));
   if (evs.length) html += `<h2>이벤트 <span class="en">Events</span></h2><div class="card"><div class="table-wrap"><table><thead><tr><th>t</th><th>type</th><th>value</th><th>phase</th></tr></thead><tbody>${evs.map(e => `<tr><td>${fmtClock((e.t - s.startedAt) / 1000)}</td><td>${esc(e.type)}</td><td>${e.value ?? ''}</td><td>${esc(e.phase || '')}${e.rep ? ' #' + e.rep : ''}</td></tr>`).join('')}</tbody></table></div></div>`;
   if (s.type === 'test' || (s.stages && s.stages.length)) {
@@ -331,6 +355,8 @@ async function renderSessionDetail(id) {
   const sc = $('#step-chart'); if (sc && r.rows.length) { const rows = r.rows.filter(x => Number.isFinite(x.speed)); const marks = []; if (r.lactate && Number.isFinite(r.lactate.lt1Primary.x)) marks.push({ x: r.lactate.lt1Primary.x, label: 'LT1', color: getComputedStyle(document.documentElement).getPropertyValue('--c-la') }); if (r.lactate && Number.isFinite(r.lactate.lt2Primary.x)) marks.push({ x: r.lactate.lt2Primary.x, label: 'LT2', color: getComputedStyle(document.documentElement).getPropertyValue('--c-la') }); if (r.hrv.hrvt1) marks.push({ x: r.hrv.hrvt1.speed, label: 'HRVT1', row: 1, color: getComputedStyle(document.documentElement).getPropertyValue('--c-a1') }); if (r.hrv.hrvt2) marks.push({ x: r.hrv.hrvt2.speed, label: 'HRVT2', row: 1, color: getComputedStyle(document.documentElement).getPropertyValue('--c-a1') }); if (r.smo2.bp2) marks.push({ x: r.smo2.bp2.speed, label: 'BP2', row: 2, color: getComputedStyle(document.documentElement).getPropertyValue('--c-smo2') }); A.charts.push(stepTestChart(sc, { speeds: rows.map(x => x.speed), lactate: rows.map(x => Number.isFinite(x.lactate) ? x.lactate : null), a1: rows.map(x => Number.isFinite(x.alpha1) ? x.alpha1 : null), smo2: rows.map(x => Number.isFinite(x.smo2) ? x.smo2 : null), hr: rows.map(x => Number.isFinite(x.hr) ? x.hr : null), marks })); }
   // stage edits
   const tbl = $('#stage-table'); if (tbl) tbl.addEventListener('change', async e => { const inp = e.target; const tr = inp.closest('tr'); if (!tr) return; const idx = +tr.dataset.idx; const st = s.stages.find(x => x.idx === idx); if (!st) return; const val = inp.value === '' ? null : +inp.value; st[inp.dataset.f] = val; if (s.type === 'test') s.result = resultFrom(analyzeSession(s)); await store.putSession(s); await renderSessionDetail(id); });
+  for (const [id, key] of [['vc-speed', 'speed'], ['vc-incline', 'incline']]) { const el = document.getElementById(id); if (el) el.onchange = async () => { s[key] = el.value === '' ? null : +el.value; await store.putSession(s); destroyCharts(); await renderSessionDetail(id === 'vc-speed' ? s.id : s.id); }; }
+  for (const [id, key] of [['vc-rest', 'rest'], ['vc-mid', 'mid'], ['vc-end', 'end']]) { const el = document.getElementById(id); if (el) el.onchange = async () => { s.lactateChecks = { ...lactateChecks(s), [key]: el.value === '' ? null : +el.value }; await store.putSession(s); destroyCharts(); await renderSessionDetail(s.id); }; }
   const off = $('#smo2-offset'); if (off) off.onchange = async () => { s.smo2.offsetMs = (+off.value || 0) * 1000; await store.putSession(s); destroyCharts(); await renderSessionDetail(id); };
 }
 async function applyZonesFromDetail() {
@@ -421,7 +447,7 @@ function renderSettings() {
       <div class="grid3">${num('protocol.stageSec', '단계 초 / stage s', 'step="30"')}${num('protocol.pauseSec', '채혈 초 / pause s', 'step="5"')}${num('protocol.maxStages', '최대 단계 / max', 'step="1"')}</div>
       <div class="grid3">${num('protocol.warmupSec', '워밍업 초 / warm-up s', 'step="30"')}${num('protocol.warmupSpeed', '워밍업 km/h', 'step="0.5"')}<span></span></div>
       <div class="grid2">${num('protocol.stopLactate', '종료 젖산 mmol/L', 'step="0.5"')}${num('protocol.stopRpe', '종료 RPE', 'step="1"')}</div>
-      <p class="small muted">권장: 3분 단계 + 30초 채혈 정지(벨트 양옆 딛기), 경사 1% 고정. 재검사 때도 동일 프로토콜.<span class="en">Recommended: 3-min stages + 30-s sampling pause (straddle the belt), 1% incline fixed. Keep the same protocol for retests.</span></p></div>
+      <p class="small muted">권장: 3분 단계 + 30초 채혈 정지(벨트 양옆 딛기), 경사 1% 고정. 재검사 때도 동일 프로토콜. <b>채혈 초를 0으로 두면 정지 없이 연속 진행(α1 전용 테스트)</b>, 혼자 할 때는 45~60초로 늘려도 됩니다.<span class="en">Recommended: 3-min stages + 30-s sampling pause (straddle the belt), 1% incline fixed. Keep the same protocol for retests. <b>Pause = 0 runs the stages back-to-back (α1-only test)</b>; alone, 45–60 s is fine.</span></p></div>
     <h2>${t('alpha_settings')}</h2><div class="card stack"><div class="grid3">${sel('alpha1.artifactMode', '아티팩트 임계 / threshold', [['auto', 'Auto (5%/25%)'], ['0.05', '5%'], ['0.25', '25%'], ['off', '끄기 / off']])}${sel('alpha1.stepSec', '갱신 주기 / update', [[5, '5 s'], [10, '10 s'], [20, '20 s']])}${sel('alpha1.scales', '스케일 / scales', [['fatmaxxer', 'FatMaxxer (3–15)'], ['kubios', '4–16']])}</div>
       <p class="small muted">기본값은 FatMaxxer와 동일(2분 창, smoothness priors λ=500, FatMaxxer 스케일).<span class="en">Defaults match FatMaxxer (2-min window, smoothness priors λ=500, FatMaxxer scales).</span></p></div>
     <h2>${t('alert_settings')}</h2><div class="card stack">${chk('alerts.voice', t('voice'))}${chk('alerts.vibrate', t('vibrate'))}${chk('alerts.beep', t('beep'))}${num('alerts.zoneExitSec', '존 이탈 알림 지연 초 / zone-exit delay s', 'step="5"')}<button data-action="test-alert">${t('test_alert')}</button></div>
@@ -477,6 +503,8 @@ async function onViewClick(e) {
     case 'copy-plan': copyText(claudeSummary({ profile: { age: ageFrom(A.settings.profile.birth), restHr: A.settings.profile.restHr, maxHr: effectiveMaxHr() }, zones: zonesObj(), plan: A.planCache })); break;
     case 'attach-smo2': attachSmo2Modal(); break;
     case 'apply-zones': await applyZonesFromDetail(); break;
+    case 'apply-verdict': { const vd = A.detail ? lactateVerdict(A.detail) : null; if (!vd || !vd.adjust) break; const z = A.settings.zones; if (vd.adjust.lt1Hr && Number.isFinite(z.lt1Hr)) z.lt1Hr = Math.round(z.lt1Hr + vd.adjust.lt1Hr); if (vd.adjust.lt2Speed && Number.isFinite(z.lt2Speed)) z.lt2Speed = Math.round((z.lt2Speed + vd.adjust.lt2Speed) * 10) / 10; z.source = (z.source || '') + ' +verify'; z.updatedAt = z.updatedAt || Date.now(); await saveSettings(); toast(tx('applied')); await renderSessionDetail(A.detail.id); break; }
+    case 'apply-multiday': { const md = A.multiDay; if (!md?.analysis) break; const L1 = md.analysis.lt1Primary, L2 = md.analysis.lt2Primary; A.settings.zones = { lt1Hr: Math.round(L1.hr), lt2Hr: Math.round(L2.hr), lt1Speed: Math.round(L1.x * 10) / 10, lt2Speed: Math.round(L2.x * 10) / 10, source: 'multi-day lactate', grade: `${md.grade}/${md.grade}`, updatedAt: Date.now(), testSessionId: null }; if (!A.settings.plan.startDate) A.settings.plan.startDate = new Date().toISOString().slice(0, 10); await saveSettings(); toast(tx('applied')); render(); break; }
     case 'week-prev': A.settings.plan.weekOffset = (A.settings.plan.weekOffset || 0) - 1; await saveSettings(); render(); break;
     case 'week-next': A.settings.plan.weekOffset = (A.settings.plan.weekOffset || 0) + 1; await saveSettings(); render(); break;
     case 'test-alert': if (!A.alerts) A.alerts = new Alerts(A.settings.alerts); A.alerts.update(A.settings.alerts); A.alerts.unlock(); A.alerts.cue('알림 테스트. 3단계, 시속 8 킬로미터.', { beep: 'double', vib: [300, 100, 300] }); break;
