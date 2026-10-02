@@ -106,6 +106,7 @@ function renderLive() {
     if (L.mode === 'test') {
       const P = A.settings.protocol; const stages = buildStages(P, A.settings.treadmill);
       html += `<div class="card" style="margin-top:10px"><div class="row between"><h3>${t('protocol')}</h3><button class="compact ghost" data-action="go-settings">${t('nav_settings')}</button></div>
+        <div class="segment" id="pause-seg" style="margin:6px 0 10px"><button class="${P.pauseSec > 0 ? 'active' : ''}" data-pause="30">채혈 정지 30초<span class="en">30-s sampling pause</span></button><button class="${P.pauseSec > 0 ? '' : 'active'}" data-pause="0">연속 · 채혈 없음 (혼자)<span class="en">Continuous · no sampling (solo)</span></button></div>
         <p class="small">${P.type === 'speed' ? `경사 ${P.incline}% 고정 · ${P.startSpeed} km/h부터 +${P.speedStep} km/h` : `속도 ${P.fixedSpeed} km/h 고정 · 경사 ${P.startIncline}%부터 +${P.inclineStep}%p`} · ${P.stageSec / 60}분 + 채혈 ${P.pauseSec}초 · 워밍업 ${P.warmupSec / 60}분 @ ${P.warmupSpeed} km/h<span class="en">${P.type === 'speed' ? `${P.incline}% incline fixed · from ${P.startSpeed} km/h, +${P.speedStep} km/h` : `${P.fixedSpeed} km/h fixed · from ${P.startIncline}%, +${P.inclineStep}%`} · ${P.stageSec / 60} min + ${P.pauseSec}-s sampling · warm-up ${P.warmupSec / 60} min @ ${P.warmupSpeed} km/h</span></p>
         <p class="small muted">${t('stop_criteria', { la: P.stopLactate, rpe: P.stopRpe })}</p>
         <div class="small mono">${stages.map(s => `${s.idx}: ${s.speed}${P.type === 'incline' ? `/${s.incline}%` : ''}`).join(' · ')}</div></div>`;
@@ -152,6 +153,7 @@ function mountLive() {
   if (v.state === 'running') { const el = $('#lv-chart'); if (el) { A.live.chart = liveChart(el, { getBand: () => eng.targets ? [eng.targets.hrLo, eng.targets.hrHi] : null }); A.charts.push(A.live.chart); } updateLive(v); }
   const diag = $('#ble-diag'); if (diag) bleDiagnostics().then(txt => { diag.innerHTML = txt; });
   const ms = $('#mode-seg'); if (ms) ms.addEventListener('click', e => { const b = e.target.closest('button'); if (b) { A.live.mode = b.dataset.mode; render(); } });
+  const ps = $('#pause-seg'); if (ps) ps.addEventListener('click', async e => { const b = e.target.closest('button'); if (!b) return; A.settings.protocol.pauseSec = +b.dataset.pause; await saveSettings(); if (A.engine) A.engine.settings = A.settings; toast(+b.dataset.pause ? '매 단계 채혈 30초 / 30-s pause each stage' : '연속 테스트 · 채혈 없음 / continuous, no sampling'); render(); });
   const ss = $('#src-seg'); if (ss) ss.addEventListener('click', e => { const b = e.target.closest('button'); if (b && !b.disabled) { A.live.sourceKind = b.dataset.src; if (A.source && A.source.kind !== b.dataset.src) { A.source.disconnect(); A.source = null; } render(); } });
   const ds = $('#demo-speed'); if (ds) ds.onchange = () => { A.live.demoSpeed = +ds.value; };
   const rs = $('#replay-speed'); if (rs) rs.onchange = () => { A.live.replaySpeed = +rs.value; };
