@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
+<meta name="theme-color" content="#0f1316" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f3f5f7" media="(prefers-color-scheme: light)">
+<meta name="description" content="Polar H10 DFA α1, lactate and SmO2 step testing with LT1/LT2 session guidance and training prescription.">
+<title>Treadmill Lab</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="vendor/uPlot.min.css">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="app">
+  <header class="top">
+    <h1>러닝머신 랩<span class="en">Treadmill Lab</span></h1>
+    <span class="spacer"></span>
+    <span id="conn-chip" class="pill"><span class="dot"></span><span id="conn-text">H10</span></span>
+  </header>
+  <main id="view" aria-live="polite"></main>
+  <nav class="bottom" id="nav">
+    <button data-view="home"><span class="ico">⌂</span><span class="ko">홈</span><span class="en">Home</span></button>
+    <button data-view="live"><span class="ico">▶</span><span class="ko">세션</span><span class="en">Session</span></button>
+    <button data-view="analysis"><span class="ico">⌁</span><span class="ko">분석</span><span class="en">Analysis</span></button>
+    <button data-view="plan"><span class="ico">▦</span><span class="ko">계획</span><span class="en">Plan</span></button>
+    <button data-view="settings"><span class="ico">⚙</span><span class="ko">설정</span><span class="en">Settings</span></button>
+  </nav>
+  <div id="modal-root"></div>
+  <div id="toast-root"></div>
+</div>
+<input type="file" id="file-input" multiple accept=".csv,.fit,.txt,.json" hidden>
+<script src="vendor/uPlot.iife.min.js"></script>
+<script type="module" src="js/app.js"></script>
+<noscript>JavaScript가 필요합니다 / JavaScript required.</noscript>
+</body>
+</html>

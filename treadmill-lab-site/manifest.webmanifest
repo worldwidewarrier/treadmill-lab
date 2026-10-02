@@ -1,0 +1,17 @@
+{
+  "name": "Treadmill Lab — 러닝머신 랩",
+  "short_name": "Treadmill Lab",
+  "description": "Polar H10 DFA α1 + lactate + SmO2 step testing, LT1/LT2 live guidance and training prescription.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0f1316",
+  "theme_color": "#0f1316",
+  "lang": "ko",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
