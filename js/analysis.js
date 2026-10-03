@@ -86,7 +86,15 @@ export function hrvThresholds(rows, { artifactLimit = 5 } = {}) {
     }
     return crossingDescending(valid, 'alpha1', level);
   };
-  res.hrvt1 = solve(0.75); res.hrvt2 = solve(0.5);
+  const poorFit = !(Number.isFinite(fit.r2) && fit.r2 >= 0.7);
+  if (poorFit) { // a weak linear a1–HR relationship (plateau/floor pattern): use first crossings instead of the regression
+    res.hrvt1 = crossingDescending(valid, 'alpha1', 0.75); res.hrvt2 = crossingDescending(valid, 'alpha1', 0.5);
+    res.note = `weak linear fit (r²=${Number.isFinite(fit.r2) ? fit.r2.toFixed(2) : 'n/a'}) — first crossings used`;
+  } else { res.hrvt1 = solve(0.75); res.hrvt2 = solve(0.5); }
+  // plateau detection: a1 stuck in 0.3–0.55 while HR keeps rising over ≥4 stages → thresholds from a1 are unreliable
+  const sorted = valid.slice().sort((a, b) => a.hr - b.hr); let run = [];
+  for (const r of sorted) { if (r.alpha1 >= 0.3 && r.alpha1 <= 0.55) run.push(r); else if (run.length >= 4) break; else run = []; }
+  if (run.length >= 4 && (run[run.length - 1].hr - run[0].hr) >= 20) res.plateau = { stages: run.length, hrFrom: run[0].hr, hrTo: run[run.length - 1].hr, note: `a1 floor (0.3–0.55) across ${run.length} stages (${Math.round(run[0].hr)}–${Math.round(run[run.length - 1].hr)} bpm): early a1 decline — verify with lactate` };
   if (!res.hrvt1) res.note = 'a1 never crossed 0.75 (test too easy or a1 noisy)';
   if (res.hrvt1 && !res.hrvt2) res.note = 'a1 did not reach 0.5 (test ended before HRVT2)';
   return res;
