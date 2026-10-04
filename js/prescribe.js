@@ -136,7 +136,7 @@ export function sessionSummaryText(session, metrics, zones, analysis = null) {
 export function claudeSummary({ profile, zones, session, metrics, analysis, plan }) {
   const L = [];
   L.push(`# Treadmill Lab summary (${new Date().toISOString().slice(0, 10)})`);
-  if (profile) L.push(`Athlete: age ${profile.age ?? '?'}, resting HR ${profile.restHr ?? '?'}, max HR ${profile.maxHr ?? '?'}`);
+  if (profile) L.push(`Athlete: age ${profile.age ?? '?'}, resting HR ${profile.restHr ?? '?'}, max HR ${profile.maxHr ?? '?'}${profile.appVersion ? ` (app v${profile.appVersion})` : ''}`);
   if (zones) L.push(`Thresholds: LT1 ${Math.round(zones.lt1Hr)} bpm @ ${zones.lt1Speed ?? '?'} km/h; LT2 ${Math.round(zones.lt2Hr)} bpm @ ${zones.lt2Speed ?? '?'} km/h${zones.grade ? ` (grade ${zones.grade})` : ''}${zones.updatedAt ? `, set ${new Date(zones.updatedAt).toISOString().slice(0, 10)}` : ''}`);
   if (session) {
     L.push(`Session: ${session.type}, ${new Date(session.startedAt).toLocaleString()}, ${Math.round((metrics?.durationSec || 0) / 60)} min, source ${session.sourceKind}`);

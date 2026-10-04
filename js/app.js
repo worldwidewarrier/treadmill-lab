@@ -11,6 +11,7 @@ import { importFile } from './importers.js';
 import { liveChart, timelineChart, stepTestChart, trendChart } from './charts.js';
 
 // ---------- defaults ----------
+export const APP_VERSION = '1.1.6'; // keep in sync with sw.js VERSION
 const DEFAULTS = {
   profile: { birth: '1997-07-21', restHr: 52, maxHr: 188, maxHrMode: 'tanaka', lang: 'both', theme: 'system' },
   treadmill: { model: 'LTSXL', minSpeed: 0.8, maxSpeed: 18, speedStep: 0.1, maxIncline: 15, inclineStep: 0.5 },
@@ -472,7 +473,8 @@ function renderSettings() {
       <li>끝나면 Train.Red 앱에서 CSV 내보내기 → 이 앱 분석 탭에서 가져오기(자동 연결) → 삼각측량 확인 → "존에 적용" <span class="muted">/ export the Train.Red CSV → import it in Analysis (auto-attaches) → check the triangulation → Apply</span></li>
     </ol></details></div>
     <h2>${t('data')}</h2><div class="card stack"><button data-action="backup">${t('backup')}</button><button data-action="restore">${t('restore')}</button><button class="danger" data-action="clear-all">${t('clear_all')}</button><p class="small muted">모든 데이터는 이 폰의 브라우저 안에만 저장됩니다. 폰을 바꾸기 전 백업하세요.<span class="en">All data stays in this phone's browser. Back up before changing phones.</span></p></div>
-    <p class="small muted" style="margin-top:14px">Treadmill Lab v1.0 · DFA α1 engine matches FatMaxxer alpha1v2 (Apache-2.0) · ${t('disclaimer')}</p>`;
+    <div class="card stack" style="margin-top:14px"><div class="row between"><span class="small">Treadmill Lab <b>v${APP_VERSION}</b></span><button class="compact ghost" data-action="force-update">강제 업데이트 / force update</button></div><p class="small muted">새 버전이 적용되지 않을 때: 캐시를 지우고 다시 불러옵니다 (데이터는 유지).<span class="en">If an update doesn't appear: clears the app cache and reloads (your data is kept).</span></p></div>
+    <p class="small muted" style="margin-top:14px">DFA α1 engine matches FatMaxxer alpha1v2 (Apache-2.0) · ${t('disclaimer')}</p>`;
 }
 function mountSettings() { /* delegated listener registered once in init */ }
 async function onSettingsChange(e) {
@@ -508,8 +510,8 @@ async function onViewClick(e) {
     case 'delete-import': e.stopPropagation(); confirmBox(t('delete') + '?', async () => { await store.deleteImport(b.dataset.id); await refreshLists(); render(); }); break;
     case 'import-detail': { const i = await store.getImport(b.dataset.id); modal(`<h3>${esc(i.filename)}</h3><dl class="kv"><dt>source</dt><dd>${esc(i.source)}</dd><dt>start</dt><dd>${fmtDate(i.startedAt)}</dd><dt>duration</dt><dd>${fmtClock(i.durationSec)}</dd>${i.meta?.position ? `<dt>position</dt><dd>${esc(i.meta.position)}</dd>` : ''}${i.smo2Series ? `<dt>SmO2 pts</dt><dd>${i.smo2Series.length}</dd>` : ''}${i.features ? `<dt>features</dt><dd>${i.features.length}</dd>` : ''}</dl><p class="small muted" style="margin-top:8px">세션 상세에서 「SmO2 파일 붙이기」로 연결하세요. / Attach from a session's detail view.</p>`); break; }
     case 'export-csv': if (A.detail) exportSessionCsv(A.detail); break;
-    case 'copy-summary': if (A.detail) { const s = A.detail; const r = analyzeSession(s); copyText(claudeSummary({ profile: { age: ageFrom(A.settings.profile.birth), restHr: A.settings.profile.restHr, maxHr: effectiveMaxHr() }, zones: zonesObj(), session: s, metrics: sessionMetrics(s), analysis: r, plan: null })); } break;
-    case 'copy-plan': copyText(claudeSummary({ profile: { age: ageFrom(A.settings.profile.birth), restHr: A.settings.profile.restHr, maxHr: effectiveMaxHr() }, zones: zonesObj(), plan: A.planCache })); break;
+    case 'copy-summary': if (A.detail) { const s = A.detail; const r = analyzeSession(s); copyText(claudeSummary({ profile: { age: ageFrom(A.settings.profile.birth), restHr: A.settings.profile.restHr, maxHr: effectiveMaxHr(), appVersion: APP_VERSION }, zones: zonesObj(), session: s, metrics: sessionMetrics(s), analysis: r, plan: null })); } break;
+    case 'copy-plan': copyText(claudeSummary({ profile: { age: ageFrom(A.settings.profile.birth), restHr: A.settings.profile.restHr, maxHr: effectiveMaxHr(), appVersion: APP_VERSION }, zones: zonesObj(), plan: A.planCache })); break;
     case 'attach-smo2': attachSmo2Modal(); break;
     case 'apply-zones': await applyZonesFromDetail(); break;
     case 'apply-verdict': { const vd = A.detail ? lactateVerdict(A.detail) : null; if (!vd || !vd.adjust) break; const z = A.settings.zones; if (vd.adjust.lt1Hr && Number.isFinite(z.lt1Hr)) z.lt1Hr = Math.round(z.lt1Hr + vd.adjust.lt1Hr); if (vd.adjust.lt2Speed && Number.isFinite(z.lt2Speed)) z.lt2Speed = Math.round((z.lt2Speed + vd.adjust.lt2Speed) * 10) / 10; z.source = (z.source || '') + ' +verify'; z.updatedAt = z.updatedAt || Date.now(); await saveSettings(); toast(tx('applied')); await renderSessionDetail(A.detail.id); break; }
@@ -517,6 +519,7 @@ async function onViewClick(e) {
     case 'week-prev': A.settings.plan.weekOffset = (A.settings.plan.weekOffset || 0) - 1; await saveSettings(); render(); break;
     case 'week-next': A.settings.plan.weekOffset = (A.settings.plan.weekOffset || 0) + 1; await saveSettings(); render(); break;
     case 'test-alert': if (!A.alerts) A.alerts = new Alerts(A.settings.alerts); A.alerts.update(A.settings.alerts); A.alerts.unlock(); A.alerts.cue('알림 테스트. 3단계, 시속 8 킬로미터.', { beep: 'double', vib: [300, 100, 300] }); break;
+    case 'force-update': { try { if ('serviceWorker' in navigator) { for (const r of await navigator.serviceWorker.getRegistrations()) await r.unregister(); } if (window.caches) { for (const k of await caches.keys()) await caches.delete(k); } } catch (e) { console.warn(e); } location.reload(); break; }
     case 'backup': download(`treadmill-lab-backup_${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(await store.exportAll()), 'application/json'); break;
     case 'restore': A.pendingReplayPick = false; $('#file-input').click(); break;
     case 'clear-all': confirmBox(t('clear_all') + '?', async () => { await store.clearAll(); A.settings = JSON.parse(JSON.stringify(DEFAULTS)); await saveSettings(); await refreshLists(); navigate('home'); }); break;

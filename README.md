@@ -73,6 +73,7 @@ node test/test_analysis.mjs        # HRVT / SmO2 / triangulation on a synthetic 
 node test/test_prescribe.mjs       # zones, weekly plan, insights
 node test/test_session.mjs         # full synthetic step test through the engine (×120)
 TZ=Asia/Seoul node test/test_importers.mjs   # Train.Red CSV/FIT, FatMaxxer, Garmin FIT (python3 test/make_fit.py first)
+node test/test_version.mjs         # APP_VERSION (app.js) == sw.js VERSION
 node test/ui_smoke.mjs             # headless Chromium at 384×604 (needs playwright)
 ```
 
