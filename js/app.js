@@ -376,6 +376,11 @@ function attachSmo2Modal() {
 function exportSessionCsv(s) {
   const r = analyzeSession(s); const L = [];
   L.push('# Treadmill Lab session export'); L.push(`# type,${s.type},start,${new Date(s.startedAt).toISOString()},source,${s.sourceKind || ''}`);
+  L.push(`# end,${s.endedAt ? new Date(s.endedAt).toISOString() : ''},duration_s,${s.endedAt ? Math.round((s.endedAt - s.startedAt) / 1000) : ''},speed_kmh,${s.speed ?? ''},incline_pct,${s.incline ?? ''}`);
+  const lc = lactateChecks(s); const vd = lactateVerdict(s);
+  L.push(`# lactate_rest,${lc.rest ?? ''},lactate_mid,${lc.mid ?? ''},lactate_end,${lc.end ?? ''},verdict,${vd ? vd.level : ''},${vd ? '"' + vd.en.replace(/"/g, "'") + '"' : ''}`);
+  const ev = (s.events || []).filter(e => e.type === 'lactate' || e.type === 'rpe' || e.type === 'lap' || e.type === 'pause' || e.type === 'resume' || e.type === 'stop');
+  if (ev.length) { L.push('event_t_iso,elapsed_s,type,value,stage,phase'); for (const e of ev) L.push([new Date(e.t).toISOString(), ((e.t - s.startedAt) / 1000).toFixed(0), e.type, e.value ?? e.reason ?? '', e.stage ?? '', e.phase ?? ''].join(',')); L.push(''); }
   if (r.rows.length) { L.push('stage,speed_kmh,incline_pct,hr_bpm,alpha1,lactate_mmol,rpe,smo2_pct,smo2_slope_pct_per_min,artifact_pct'); for (const x of r.rows) L.push([x.idx, x.speed, x.incline, n0(x.hr), n2(x.alpha1), x.lactate ?? '', x.rpe ?? '', n1(x.smo2), Number.isFinite(x.smo2Slope) ? x.smo2Slope.toFixed(2) : '', n1(x.artifactPct)].join(',')); L.push(''); }
   L.push('t_iso,elapsed_s,hr_bpm,alpha1,rmssd_ms,artifact_pct,samples,phase,stage'); for (const f of s.features || []) L.push([new Date(f.t).toISOString(), ((f.t - s.startedAt) / 1000).toFixed(0), f.hrInst ?? '', Number.isFinite(f.alpha1) ? f.alpha1.toFixed(3) : '', Number.isFinite(f.rmssd) ? f.rmssd.toFixed(1) : '', f.artifactPct?.toFixed(1) ?? '', f.samples ?? '', f.phase ?? '', f.stage ?? ''].join(','));
   L.push(''); L.push('rr_t_ms,rr_ms,accepted'); for (const x of s.rr || []) L.push(x.join(','));
