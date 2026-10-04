@@ -5,7 +5,7 @@ import { Alerts } from './alerts.js';
 import { HeartRateSource } from './ble.js';
 import { ReplaySource, DemoSource, demoProfileForEngine } from './sources.js';
 import { SessionEngine, DEFAULT_PROTOCOL, DEFAULT_INTERVALS, buildStages, computeFeaturesOffline } from './session.js';
-import { analyzeSession, summarizeStages } from './analysis.js';
+import { analyzeSession, summarizeStages, smo2Steady } from './analysis.js';
 import { computeZones, sessionTargets, weeklyPlan, lt2Structure, sessionMetrics, assessRecent, sessionSummaryText, claudeSummary, lactateChecks, lactateVerdict, multiDayCurve, endWindowStats } from './prescribe.js';
 import { importFile } from './importers.js';
 import { liveChart, timelineChart, stepTestChart, trendChart } from './charts.js';
@@ -329,6 +329,7 @@ async function renderSessionDetail(id) {
       <div class="grid2"><label class="field">러닝머신 km/h<input type="number" step="0.1" id="vc-speed" value="${s.speed ?? ''}"></label><label class="field">경사 %<input type="number" step="0.5" id="vc-incline" value="${s.incline ?? ''}"></label></div>
       <div class="grid3" style="margin-top:8px"><label class="field">안정 시 / rest<input type="number" step="0.1" id="vc-rest" value="${c.rest ?? ''}"></label><label class="field">10분 / mid<input type="number" step="0.1" id="vc-mid" value="${c.mid ?? ''}"></label><label class="field">종료 / end<input type="number" step="0.1" id="vc-end" value="${c.end ?? ''}"></label></div>
       <p class="small muted" style="margin-top:6px">마지막 5분 평균: 심박 ${n0(ew.hr)} bpm · α1 ${n2(ew.alpha1)} <span class="en">Last-5-min mean: HR ${n0(ew.hr)} · α1 ${n2(ew.alpha1)}</span></p>
+      ${(() => { const ss = smo2Steady(s); if (!ss) return ''; const st = ss.steady == null ? '' : ss.steady ? '안정 상태 / steady' : '비정상 상태 — 계속 하락 / not steady — still falling'; return `<div class="notice ${ss.steady === false || ss.contact === 'low' ? 'warn' : ''}" style="margin-top:6px"><b>SmO₂</b> 5–10분 ${n1(ss.earlyMean)} % → 마지막 5분 ${n1(ss.endMean)} % (Δ ${Number.isFinite(ss.drift) ? (ss.drift > 0 ? '+' : '') + ss.drift.toFixed(1) : '–'}), 끝 10분 기울기 ${Number.isFinite(ss.slopeEnd) ? ss.slopeEnd.toFixed(2) : '–'} %/min → ${st}. THb ${n1(ss.thbMean)}${ss.contact === 'low' ? ' ⚠ 접촉 불량 의심 / poor contact?' : ''}<span class="en">SmO₂ 5–10 min ${n1(ss.earlyMean)} % → last 5 min ${n1(ss.endMean)} %, end slope ${Number.isFinite(ss.slopeEnd) ? ss.slopeEnd.toFixed(2) : '–'} %/min → ${ss.steady == null ? '' : ss.steady ? 'steady' : 'not steady'}</span></div>`; })()}
       ${vd ? `<div class="notice ${vd.level === 'ok' ? '' : 'warn'}" style="margin-top:6px"><span class="ko">${esc(vd.ko)}</span><span class="en">${esc(vd.en)}</span></div>${vd.adjust ? `<button class="compact" style="margin-top:8px" data-action="apply-verdict">조정 적용 (${vd.adjust.lt1Hr ? `LT1 ${vd.adjust.lt1Hr > 0 ? '+' : ''}${vd.adjust.lt1Hr} bpm` : ''}${vd.adjust.lt2Speed ? `LT2 ${vd.adjust.lt2Speed > 0 ? '+' : ''}${vd.adjust.lt2Speed} km/h` : ''}) <span class="en">Apply adjustment</span></button>` : ''}` : `<p class="small muted">종료 젖산을 입력하면 LT1/LT2 판정이 나옵니다. 세션 중 「젖산 입력」으로 기록한 값은 시각에 따라 자동 배치됩니다. <span class="en">Enter the end lactate to get a verdict; values logged during the session are placed automatically by time.</span></p>`}
     </div>`;
   }
@@ -379,6 +380,7 @@ function exportSessionCsv(s) {
   L.push(`# end,${s.endedAt ? new Date(s.endedAt).toISOString() : ''},duration_s,${s.endedAt ? Math.round((s.endedAt - s.startedAt) / 1000) : ''},speed_kmh,${s.speed ?? ''},incline_pct,${s.incline ?? ''}`);
   const lc = lactateChecks(s); const vd = lactateVerdict(s);
   L.push(`# lactate_rest,${lc.rest ?? ''},lactate_mid,${lc.mid ?? ''},lactate_end,${lc.end ?? ''},verdict,${vd ? vd.level : ''},${vd ? '"' + vd.en.replace(/"/g, "'") + '"' : ''}`);
+  const ss = smo2Steady(s); if (ss) L.push(`# smo2_early_pct,${n1(ss.earlyMean)},smo2_end_pct,${n1(ss.endMean)},smo2_drift,${Number.isFinite(ss.drift) ? ss.drift.toFixed(1) : ''},smo2_end_slope_pct_per_min,${Number.isFinite(ss.slopeEnd) ? ss.slopeEnd.toFixed(2) : ''},steady,${ss.steady == null ? '' : ss.steady},thb_mean,${n1(ss.thbMean)},contact,${ss.contact ?? ''}`);
   const ev = (s.events || []).filter(e => e.type === 'lactate' || e.type === 'rpe' || e.type === 'lap' || e.type === 'pause' || e.type === 'resume' || e.type === 'stop');
   if (ev.length) { L.push('event_t_iso,elapsed_s,type,value,stage,phase'); for (const e of ev) L.push([new Date(e.t).toISOString(), ((e.t - s.startedAt) / 1000).toFixed(0), e.type, e.value ?? e.reason ?? '', e.stage ?? '', e.phase ?? ''].join(',')); L.push(''); }
   if (r.rows.length) { L.push('stage,speed_kmh,incline_pct,hr_bpm,alpha1,lactate_mmol,rpe,smo2_pct,smo2_slope_pct_per_min,artifact_pct'); for (const x of r.rows) L.push([x.idx, x.speed, x.incline, n0(x.hr), n2(x.alpha1), x.lactate ?? '', x.rpe ?? '', n1(x.smo2), Number.isFinite(x.smo2Slope) ? x.smo2Slope.toFixed(2) : '', n1(x.artifactPct)].join(',')); L.push(''); }

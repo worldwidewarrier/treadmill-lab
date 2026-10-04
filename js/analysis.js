@@ -124,6 +124,28 @@ function piecewise(xs, ys, k) {
 }
 
 /** SmO2 breakpoints from stage means vs speed (2 breakpoints when ≥6 stages, else 1). */
+/**
+ * Constant-load SmO2 steady-state summary (verification / LT1 / LT2 runs):
+ * early window (5–10 min) vs last 5 min, end slope (%/min over the last 10 min), THb as contact quality.
+ * steady = end slope > −0.3 %/min (SmO2 keeps falling at the end only above the sustainable domain).
+ */
+export function smo2Steady(session, { earlyFrom = 300, earlyTo = 600, endSec = 300, slopeSec = 600 } = {}) {
+  const smo = session.smo2 && session.smo2.series; if (!smo || smo.length < 20) return null;
+  const off = session.smo2.offsetMs || 0; const t0 = session.startedAt;
+  const t1 = session.endedAt || (smo[smo.length - 1][0] + off);
+  const pts = smo.map(p => [p[0] + off, p[1], p[2]]).filter(p => p[0] >= t0 && p[0] <= t1 && Number.isFinite(p[1]));
+  if (pts.length < 20) return null;
+  const sel = (a, b) => pts.filter(p => p[0] >= a && p[0] < b);
+  const early = sel(t0 + earlyFrom * 1000, t0 + earlyTo * 1000), late = sel(t1 - endSec * 1000, t1 + 1), seg = sel(t1 - slopeSec * 1000, t1 + 1);
+  const thb = pts.map(p => p[2]).filter(Number.isFinite);
+  const res = { n: pts.length, coverageSec: (pts[pts.length - 1][0] - pts[0][0]) / 1000, earlyMean: mean(early.map(p => p[1])), endMean: mean(late.map(p => p[1])), min: Math.min(...pts.map(p => p[1])), max: Math.max(...pts.map(p => p[1])), thbMean: mean(thb), thbMin: thb.length ? Math.min(...thb) : NaN, slopeEnd: NaN, drift: NaN, steady: null, contact: null };
+  if (seg.length > 10) res.slopeEnd = linreg(seg.map(p => (p[0] - t1) / 60000), seg.map(p => p[1])).b;
+  if (Number.isFinite(res.earlyMean) && Number.isFinite(res.endMean)) res.drift = res.endMean - res.earlyMean;
+  if (Number.isFinite(res.slopeEnd)) res.steady = res.slopeEnd > -0.3;
+  if (Number.isFinite(res.thbMean)) res.contact = res.thbMean >= 12 ? 'ok' : 'low';
+  return res;
+}
+
 export function smo2Breakpoints(rows) {
   const valid = rows.filter(r => Number.isFinite(r.smo2) && Number.isFinite(r.speed));
   const res = { bp1: null, bp2: null, points: valid.length, note: '', slopes: valid.map(r => ({ speed: r.speed, slope: r.smo2Slope })) };

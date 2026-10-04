@@ -1,5 +1,6 @@
 // Zones, weekly plan, progression, auto-adjustments, lactate verification runs and rule-based summaries (KO/EN).
 import { analyzeLactate } from './lactate.js';
+import { smo2Steady } from './analysis.js';
 const r1 = v => Math.round(v * 10) / 10;
 const mean = a => a.length ? a.reduce((s, v) => s + v, 0) / a.length : NaN;
 
@@ -74,7 +75,11 @@ export function sessionMetrics(session) {
   const a1 = work.map(f => f.alpha1).filter(v => Number.isFinite(v));
   const hrs = (session.hrLive || []).filter(p => p[1] > 0);
   const n = hrs.length; const third = Math.floor(n / 3);
-  const hr1 = third ? mean(hrs.slice(0, third).map(p => p[1])) : NaN, hr3 = third ? mean(hrs.slice(n - third).map(p => p[1])) : NaN;
+  // Cardiac drift: last third vs first third, excluding the first 5 min (ramp-up) when the session is long enough (≥ 15 min).
+  const tStart = session.startedAt ?? (hrs.length ? hrs[0][0] : 0); const tLast = hrs.length ? hrs[hrs.length - 1][0] : 0;
+  const skip = (tLast - tStart) >= 15 * 60000 ? 5 * 60000 : 0;
+  const firstWin = hrs.filter(p => p[0] >= tStart + skip && p[0] < tStart + skip + (tLast - tStart - skip) / 3);
+  const hr1 = firstWin.length ? mean(firstWin.map(p => p[1])) : (third ? mean(hrs.slice(0, third).map(p => p[1])) : NaN), hr3 = third ? mean(hrs.slice(n - third).map(p => p[1])) : NaN;
   const art = feats.length ? mean(feats.map(f => f.artifactPct)) : NaN;
   const endT = session.endedAt || (hrs.length ? hrs[hrs.length - 1][0] : (feats.length ? feats[feats.length - 1].t : null));
   const dur = endT && session.startedAt ? Math.max(0, (endT - session.startedAt - (session.pauseMs || 0)) / 1000) : 0;
@@ -139,6 +144,8 @@ export function claudeSummary({ profile, zones, session, metrics, analysis, plan
     if (session.type !== 'test') {
       const c = lactateChecks(session); const v = lactateVerdict(session); const ew = endWindowStats(session, 300);
       L.push(`Constant load: speed ${session.speed ?? '?'} km/h, incline ${session.incline ?? '?'} %; last-5-min HR ${Number.isFinite(ew.hr) ? Math.round(ew.hr) : 'n/a'}, α1 ${Number.isFinite(ew.alpha1) ? ew.alpha1.toFixed(2) : 'n/a'}; lactate rest ${c.rest ?? 'n/a'}, 10-min ${c.mid ?? 'n/a'}, end ${c.end ?? 'n/a'}${v ? `; verdict: ${v.en}` : ''}`);
+      const ss = smo2Steady(session);
+      if (ss) L.push(`SmO2 (constant load): 5-10 min ${Number.isFinite(ss.earlyMean) ? ss.earlyMean.toFixed(1) : 'n/a'} %, last 5 min ${Number.isFinite(ss.endMean) ? ss.endMean.toFixed(1) : 'n/a'} % (drift ${Number.isFinite(ss.drift) ? (ss.drift > 0 ? '+' : '') + ss.drift.toFixed(1) : 'n/a'}), min ${Number.isFinite(ss.min) ? ss.min.toFixed(1) : 'n/a'} %, end slope ${Number.isFinite(ss.slopeEnd) ? ss.slopeEnd.toFixed(2) : 'n/a'} %/min → ${ss.steady == null ? 'n/a' : ss.steady ? 'steady' : 'NOT steady'}; THb mean ${Number.isFinite(ss.thbMean) ? ss.thbMean.toFixed(1) : 'n/a'} (contact ${ss.contact ?? 'n/a'}); coverage ${Math.round(ss.coverageSec / 60)} min`);
     }
     if (session.stages?.length) { L.push('Stages (speed km/h | incline % | HR | α1 | lactate | RPE | SmO2):'); for (const r of (analysis?.rows || session.stages)) L.push(`  ${r.speed} | ${r.incline} | ${Number.isFinite(r.hr) ? Math.round(r.hr) : '-'} | ${Number.isFinite(r.alpha1) ? r.alpha1.toFixed(2) : '-'} | ${r.lactate ?? '-'} | ${r.rpe ?? '-'} | ${Number.isFinite(r.smo2) ? r.smo2.toFixed(1) : '-'}`); }
     if (analysis?.lactate) { L.push('Lactate methods: ' + [...analysis.lactate.lt1, ...analysis.lactate.lt2].map(m => `${m.method}=${Number.isFinite(m.x) ? m.x.toFixed(2) + 'km/h/' + Math.round(m.hr) + 'bpm' : 'n/a'}`).join(', ')); }
