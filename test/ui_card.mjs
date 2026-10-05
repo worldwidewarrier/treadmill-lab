@@ -19,7 +19,8 @@ function mk(id, daysAgo, { segs, seed, type = 'free', speed, purpose, lactate = 
 }
 const sessions = [
   // LT1 check: 35 min at 138, 90 s standing with the value typed, 3.5 min of walking before Finish
-  mk('card-lt1', 6, { segs: [{ until: 2100, hr: 138 }, { until: 2190, hr: 96, fast: 0.5 }, { until: 2400, hr: 110, tau: 40 }], seed: 3, speed: 8.6, lactate: [[40, 1.2], [2160, 1.9]] }),
+  // (its stored numbers are those an earlier version would have kept: the mean of the whole recording)
+  mk('card-lt1', 6, { segs: [{ until: 2100, hr: 138 }, { until: 2190, hr: 96, fast: 0.5 }, { until: 2400, hr: 110, tau: 40 }], seed: 3, speed: 8.6, lactate: [[40, 1.2], [2160, 1.9]], extra: { metrics: { durationSec: 2400, meanHr: 133.4, maxHr: 144, meanAlpha1: 0.42, pctAlphaAbove75: 0, minAlpha1: 0.42, driftPct: -9.1, artifactPct: 0.4, timeInZonePct: null, rrCount: 0 } } }),
   // MLSS check with a 10-min sample
   mk('card-mlss', 5, { segs: [{ until: 600, hr: s => 150 + 6 * Math.min(1, s / 600) }, { until: 675, hr: 112, fast: 0.4 }, { until: 1875, hr: s => 156 + 8 * (s - 675) / 1200 }, { until: 1995, hr: 104, fast: 0.5 }, { until: 2300, hr: 118, tau: 40 }], seed: 5, speed: 10.5, purpose: 'mlss', lactate: [[650, 3.4], [1945, 4.1]] }),
   // nothing typed during the session, value typed in the card afterwards; the recording has a 6.5-min tail
@@ -71,6 +72,12 @@ await open('card-mlss'); await change('#vc-mid', ''); c = await card();
 check('emptying the 10-min field keeps it empty (and the verdict follows)', c.mid === '' && c.end === '4.1' && !c.notices.some(n => /10분→종료 상승/.test(n)), c.notices.map(n => n.slice(0, 30)).join(' | '));
 await change('#vc-end', '5.2'); c = await card();
 check('typing the end value changes only that field', c.end === '5.2' && c.mid === '' && (await page.evaluate(() => JSON.stringify(TL.detail.lactateChecks))) === '{"mid":null,"end":5.2}');
+// 4b) the numbers kept with the session (shown in the list) follow once it has been opened
+{ await open('card-lt1'); await page.waitForTimeout(300);
+  const kept = await page.evaluate(async () => { const { store } = await import('./js/store.js'); const s = await store.getSession('card-lt1'); return s.metrics; });
+  await page.evaluate(() => TL.navigate('analysis')); await page.waitForSelector('#view .list-item'); await page.waitForTimeout(300);
+  const row = await page.evaluate(() => document.querySelector('.list-item[data-id=card-lt1] .s')?.textContent || '');
+  check('numbers kept with an older session are brought in line when it is opened (list: running heart rate, duration of the recording)', Math.abs(kept.meanHr - 138) < 1 && Math.abs(kept.durationSec - 2400) < 2 && /40:00 · HR 13[789] /.test(row), `${JSON.stringify({ meanHr: kept.meanHr, dur: kept.durationSec })} · ${row.slice(0, 40)}`); }
 // 5) Finish while running; intervals
 await open('card-flat'); c = await card();
 check('Finish pressed while running: end = end of the recording, nothing flagged', c.runend === '35:00' && /기록의 끝/.test(c.how) && !c.confirm && !/추정/.test(c.last5));
@@ -87,5 +94,13 @@ const md = await page.evaluate(() => ({ pts: TL.multiDay.points.map(p => [p.x, p
 check('multi-day table: the uncertain run shows "?" for its heart rate, the others their running heart rate; intervals are not a point', md.pts.length === 4 && md.pts.find(p => p[0] === 10.8)[3] === true && md.pts.find(p => p[0] === 10.8)[2] === null && md.cells.some(r => /^10\.8\|4\.2\|\?\|\?/.test(r)) && md.note && Math.abs(md.pts.find(p => p[0] === 8.6)[2] - 138) <= 1 && !md.pts.some(p => p[1] === 1.8), JSON.stringify(md.pts));
 await page.screenshot({ path: `${SHOTS}/42-multiday-uncertain.png`, fullPage: true });
 check('no page errors', errors.length === 0, errors.join(' | ').slice(0, 300));
-console.log('errors:', errors.length ? errors : 'none'); console.log(fails ? `\n${fails} FAILED` : '\nALL PASS');
+console.log('errors:', errors.length ? errors : 'none'); errors.length = 0;
+// 8) a screen that fails says so and leaves the rest of the app usable
+{ await page.evaluate(async () => { const { store } = await import('./js/store.js'); window.__get = store.getSession; store.getSession = async () => { throw new Error('boom-for-test'); }; TL.navigate('analysis', 'card-lt1'); });
+  await page.waitForSelector('#render-error', { timeout: 5000 }); const msg = await page.textContent('#render-error');
+  await page.evaluate(async () => { const { store } = await import('./js/store.js'); store.getSession = window.__get; });
+  await page.click('#nav button[data-view=home]'); await page.waitForSelector('#view .card'); const home = await page.evaluate(() => !document.getElementById('render-error') && document.querySelectorAll('#view .card').length > 0);
+  await open('card-lt1'); const back = (await card()).end === '1.9';
+  check('a screen that throws shows what happened; the other tabs and the same screen afterwards still work', /표시하지 못했습니다/.test(msg) && /boom-for-test/.test(msg) && home && back && errors.length === 1 && /boom-for-test/.test(errors[0]), msg.slice(0, 60) + ' | errors: ' + errors.length); }
+console.log(fails ? `\n${fails} FAILED` : '\nALL PASS');
 await browser.close(); process.exit(fails ? 1 : 0);

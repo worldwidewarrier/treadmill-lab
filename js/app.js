@@ -11,7 +11,7 @@ import { importFile } from './importers.js';
 import { liveChart, timelineChart, stepTestChart, trendChart } from './charts.js';
 
 // ---------- defaults ----------
-export const APP_VERSION = '1.1.11'; // keep in sync with sw.js VERSION
+export const APP_VERSION = '1.1.12'; // keep in sync with sw.js VERSION
 const DEFAULTS = {
   profile: { birth: '1997-07-21', restHr: 52, maxHr: 188, maxHrMode: 'tanaka', lang: 'both', theme: 'system' },
   treadmill: { model: 'LTSXL', minSpeed: 0.8, maxSpeed: 18, speedStep: 0.1, maxIncline: 15, inclineStep: 0.5 },
@@ -68,12 +68,18 @@ function destroyCharts() { for (const c of A.charts) { try { c.destroy(); } catc
 function navigate(view, param = null) { A.view = view; A.param = param; destroyCharts(); render(); try { localStorage.setItem('tl.view', view); } catch (e) { /* ignore */ } window.scrollTo(0, 0); }
 async function render() {
   document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('active', b.dataset.view === A.view));
-  const v = $('#view');
-  if (A.view === 'home') v.innerHTML = await renderHome();
-  else if (A.view === 'live') { v.innerHTML = renderLive(); mountLive(); }
-  else if (A.view === 'analysis') { v.innerHTML = A.param ? '<p class="muted">…</p>' : await renderAnalysisList(); if (A.param) await renderSessionDetail(A.param); }
-  else if (A.view === 'plan') v.innerHTML = await renderPlan();
-  else if (A.view === 'settings') { v.innerHTML = renderSettings(); mountSettings(); }
+  const v = $('#view'); const view = A.view;
+  try {
+    if (A.view === 'home') v.innerHTML = await renderHome();
+    else if (A.view === 'live') { v.innerHTML = renderLive(); mountLive(); }
+    else if (A.view === 'analysis') { v.innerHTML = A.param ? '<p class="muted">…</p>' : await renderAnalysisList(); if (A.param) await renderSessionDetail(A.param); }
+    else if (A.view === 'plan') v.innerHTML = await renderPlan();
+    else if (A.view === 'settings') { v.innerHTML = renderSettings(); mountSettings(); }
+  } catch (e) {
+    // A screen that fails must not look like a frozen app: say so (with the text to report) and leave the other tabs reachable.
+    console.error('render', view, e);
+    if (A.view === view) v.innerHTML = `<div class="notice warn" id="render-error"><b>이 화면을 표시하지 못했습니다.</b> 다른 탭은 그대로 쓸 수 있고, 기록 중인 세션은 계속 기록됩니다. 아래 내용을 알려 주세요.<span class="en"><b>This screen could not be shown.</b> The other tabs still work and a running session keeps recording. Please report the text below.</span><pre class="small" style="white-space:pre-wrap;word-break:break-all;margin-top:6px">${esc(String((e && (e.stack || e.message)) || e).slice(0, 500))}</pre></div>`;
+  }
   updateConnChip();
 }
 document.getElementById('nav').addEventListener('click', e => { const b = e.target.closest('button'); if (b) navigate(b.dataset.view); });
@@ -162,7 +168,7 @@ function renderLive() {
     <div class="stats" style="margin-top:10px"><div>${tx('samples')}<b id="lv-n">0</b></div><div>RMSSD<b id="lv-rmssd">–</b></div><div>${tx('battery')}<b id="lv-batt">${A.source?.battery != null ? A.source.battery + '%' : '–'}</b></div><div>${tx('in_zone')}<b id="lv-tiz">–</b></div></div>
     <div class="card" style="margin-top:10px;padding:8px 6px 4px"><div class="chart" id="lv-chart"></div></div>
     <div class="card" style="margin-top:10px" id="lv-stages"></div>
-    <div class="row" style="margin-top:10px"><button class="compact ghost" data-action="rpe">${t('rpe_entry')}</button><button class="compact ghost" data-action="lactate">${t('lactate_entry')}</button><span class="small muted">${v.mode === 'test' ? '' : '세션 중 젖산·RPE는 이벤트로 기록 / logged as events'}</span><button class="compact ghost" id="lv-mute" data-action="mute">🔊</button></div>`;
+    <div class="row" style="margin-top:10px"><button class="compact ghost" data-action="rpe">${t('rpe_entry')}</button><button class="compact ghost" data-action="lactate">${t('lactate_entry')}</button><span class="small muted"></span><button class="compact ghost" id="lv-mute" data-action="mute">🔊</button></div>${v.mode === 'test' ? '' : '<p class="small muted" id="lv-lac-hint" style="margin-top:6px">젖산 값은 멈춘 직후, 쿨다운 전에 입력하세요 — 입력한 시각으로 달리기가 끝난 시점을 찾습니다. <span class="en">Type the lactate value right after you stop, before any cool-down: its time is used to find where the run ended.</span></p>'}`;
   return html;
 }
 function mountLive() {
@@ -363,6 +369,7 @@ async function renderSessionDetail(id) {
       'two-steps': ['채혈 값을 입력하기 전에 심박이 몇 분 간격으로 두 단계 내려갔습니다 — 첫 단계가 달리기의 끝(그 뒤는 쿨다운)인지, 속도만 낮춰 계속 달린 것인지 심박만으로는 알 수 없습니다.', 'Before the value was entered the heart rate stepped down twice, minutes apart — was the first step the end of the run (with a cool-down after it), or did you run on at a lower speed? The heart rate alone cannot tell.'],
       shallow: ['이 시점 뒤로 심박이 조금만 내려간 채 2분 넘게 지나 값이 입력됐습니다 — 멈춘 것인지 속도만 낮춘 것인지 확실하지 않습니다.', 'After this point the heart rate stayed only a little lower for more than 2 min before the value was entered — stopped, or just slower? Not certain.'],
       level: ['멈추기 전에 이미 심박이 달리기 수준보다 낮아져 있었습니다 — 어디까지가 검증 달리기였는지 확실하지 않습니다.', 'The heart rate was already below the level of the run before the stop — where the verification run ended is not certain.'],
+      error: ['이 기록에서는 달리기가 끝난 시점을 계산하지 못해, 기록의 끝을 표시했습니다.', 'Where the run ended could not be worked out for this recording, so the end of the recording is shown.'],
     }; const lead = LEAD[ew.why] || LEAD['no-entry'];
     const unsure = ew.sure ? '' : `<div class="notice warn" style="margin-top:6px"><b>달리기 종료 시점 불확실</b> — ${lead[0]} 맞으면 「확정」을, 기록 끝까지 달렸다면 ${fmtClock(recSec)}을, 아니면 실제 시각을 위 칸에 입력하세요. 그때까지 심박으로는 존을 바꾸지 않고 대리 지표 판정도 하지 않습니다.<span class="en"><b>End of the run uncertain</b> — ${lead[1]} Press "confirm" if it is right, enter ${fmtClock(recSec)} if you ran to the end of the recording, or the real time otherwise. Until then no zone is changed by heart rate and no proxy call is made.</span></div>`;
     const est = ew.sure ? ['', ''] : [' (추정 구간)', ' (estimated window)'];
@@ -418,6 +425,9 @@ async function renderSessionDetail(id) {
   };
   const reOk = document.getElementById('vc-runend-ok'); if (reOk) reOk.onclick = async () => { const w = endWindowStats(s, 300); await setRunEnd(Math.round((w.endT - s.startedAt) / 1000)); };
   const off = $('#smo2-offset'); if (off) off.onchange = async () => { s.smo2.offsetMs = (+off.value || 0) * 1000; s.smo2.alignment = { ...(s.smo2.alignment || {}), method: 'manual', ok: true, mad: s.smo2.alignment?.mad ?? NaN, estimatedMs: s.smo2.alignment?.estimatedMs ?? s.smo2.offsetMs }; await store.putSession(s); destroyCharts(); await renderSessionDetail(id); };
+  // The numbers kept with a session (the list shows them) were worked out by the version that recorded it: once the session has been
+  // opened they are the ones shown here.
+  if (s.final && JSON.stringify(s.metrics ?? null) !== JSON.stringify(m)) { s.metrics = m; try { await store.putSession(s); } catch (e) {} }
 }
 async function applyZonesFromDetail() {
   const s = A.detail; if (!s) return; const r = analyzeSession(s); const tri = r.tri; if (!tri.lt1 || !tri.lt2) return;

@@ -431,4 +431,42 @@ const truthHr = (s, a, b) => mean(s.hrLive.filter(p => p[0] >= T0 + a * 1000 && 
   check('summary, interval session: named as such, with the last rep', /interval session — last rep \d+\.\d min/.test(le) && !le.includes('running time'), le.slice(0, 200));
 }
 
+// ───────────── 17. Odd records: nothing throws, nothing takes long ─────────────
+{
+  // (a) clock times that lie far from the samples: the stop search must stay inside the heart-rate data
+  const hr = simHr({ segs: [{ until: 1800, hr: 150 }, { until: 2000, hr: 100, fast: 0.5 }], seed: 3 });
+  const odd = [
+    ['recording "ended" a week after the last sample', mk({ hr, lactate: [], endSec: 7 * 86400 })],
+    ['start time 0 (1970)', { ...mk({ hr, lactate: [[1860, 3.1]] }), startedAt: 0 }],
+    ['no heart rate at all, clock times 56 years apart', { ...mk({ hr: [], lactate: [] }), startedAt: 0, endedAt: T0, events: [{ t: T0 - 5000, type: 'lactate', value: 2 }] }],
+    ['a value typed a day after the last sample', mk({ hr, lactate: [[86400, 2.2]], endSec: 86400 + 60 })],
+  ];
+  for (const [name, s] of odd) { const t1 = performance.now(); let ok = true, tl = null; try { tl = runTimeline(s); endWindowStats(s); endOnlyProxy(s); lactateVerdict(s); sessionMetrics(s); smo2Steady(s); } catch (e) { ok = false; } const ms = performance.now() - t1; check(`odd record — ${name}: no error, quick`, ok && ms < 300 && tl && Number.isFinite(tl.end), `${ms.toFixed(0)} ms, end by ${tl && tl.how}`); }
+  // (b) fields of the wrong kind, missing fields, times out of order: every figure the screens ask for comes back (possibly empty), none throws
+  const { u } = rng(4242); const pick = a => a[Math.floor(u() * a.length)]; let threw = 0, n = 0, slowest = 0, first = '';
+  for (let k = 0; k < 600; k++) {
+    const len = pick([0, 1, 2, 30, 119, 121, 600, 2400]); const h = []; let level = 100 + u() * 60, t = T0 + pick([0, 5000, -3000]);
+    for (let i = 0; i < len; i++) { const q = u(); if (q < 0.003) level -= 40; else if (q < 0.006) level += 30; level = Math.max(45, Math.min(205, level)); h.push([q > 0.997 ? t - 20000 : q > 0.996 ? NaN : t, q < 0.01 ? pick([0, NaN, -5, 999, null, '150']) : Math.round(level + (u() - 0.5) * 6)]); t += pick([1000, 1000, 1000, 1000, 2000, 500, 0, 61000]); }
+    const evT = () => pick([T0, T0 + u() * (t - T0 + 1), t, t + 60000, T0 - 60000, NaN, undefined, null, 'x']); const ev = [];
+    for (let i = pick([0, 1, 2, 3, 6]); i > 0; i--) { const ty = pick(['lactate', 'lactate', 'pause', 'resume', 'phase', 'rpe', 'stop', undefined]); ev.push({ t: evT(), type: ty, value: pick([1.2, 3.4, null, NaN, undefined, '2.1', -1]), phase: pick(['work', 'rest', 'warmup', undefined, 7]) }); }
+    const s = { id: pick(['m' + k, undefined, null]), type: pick(['free', 'lt1', 'lt2', 'test', undefined]), startedAt: pick([T0, T0, T0, NaN, undefined, null, 0]), endedAt: pick([t, t, null, undefined, T0 - 1000, t + 3600000, NaN, 0, t + 7 * 86400000]), final: u() < 0.9, sourceKind: 'ble',
+      speed: pick([10, null, undefined, NaN, '9']), hrLive: pick([h, h, h, undefined, null]), features: pick([undefined, null, [{ t: T0 + 5000, alpha1: 0.6 }, { t: NaN, alpha1: NaN }]]), stages: pick([[], undefined]), events: pick([ev, ev, ev, undefined, null]), tiz: pick([undefined, null, { inSec: '5', totalSec: '10' }]), pauseMs: pick([0, undefined, NaN, 'x']),
+      alpha1Settings: pick([{ windowSec: 120 }, undefined, null, { windowSec: '90' }]), purpose: pick([undefined, null, 'lt1', 'mlss', 'x']), runEndSec: pick([undefined, undefined, 600, 0, -5, NaN, 1e12, '700', null]), lactateChecks: pick([undefined, undefined, { end: 2.1 }, { rest: 1, mid: 3, end: 4 }, { end: null }, { end: '3' }, null]) };
+    n++; const t1 = performance.now();
+    try { if (s.type !== 'test') runTimeline(s); sessionMetrics(s); lactateChecks(s); lactateVerdict(s); endWindowStats(s); endOnlyProxy(s); verdictZoneChange(ZONES, s); smo2Steady(s); multiDayCurve([s, { ...s, id: 'q' + k, speed: 9 }]); claudeSummary({ session: s, metrics: sessionMetrics(s) }); }
+    catch (e) { threw++; if (!first) first = `#${k}: ${e.message}`; }
+    slowest = Math.max(slowest, performance.now() - t1);
+  }
+  // (c) should the timeline code itself fail on a record, the screens still get an answer: the recording as it is, nothing concluded from it
+  { const hr2 = simHr({ segs: [{ until: 1800, hr: 150 }, { until: 2000, hr: 100, fast: 0.5 }], seed: 3 });
+    const bad = { ...mk({ hr: hr2, purpose: 'mlss' }), lactateChecks: { end: 4.0 } }; bad.events.splice(1, 0, { type: 'pause', get t() { throw new Error('boom'); } }); // (only the timeline reads the time of a Pause)
+    const err = console.error; let logged = 0; console.error = () => { logged++; }; let tl = null, vd = null, z = null, ok = true;
+    try { tl = runTimeline(bad); vd = lactateVerdict(bad); z = verdictZoneChange({ ...ZONES, lt2Hr: 120 }, bad, vd); sessionMetrics(bad); endOnlyProxy(bad); } catch (e) { ok = false; } finally { console.error = err; }
+    check('a record the timeline code fails on: no error reaches the screens — end of the recording, marked uncertain, no proxy call, no heart rate into the zones', ok && logged >= 1 && tl && tl.how === 'finish' && tl.sure === false && tl.why === 'error' && tl.end === bad.endedAt && vd && vd.unsure === true && (!z || z.zones.lt2Hr === 120), tl ? `${tl.how} ${tl.why}` : 'threw');
+    const byHand = { ...bad, runEndSec: 1800 }; console.error = () => {}; let t2 = null; try { t2 = runTimeline(byHand); } finally { console.error = err; }
+    check('  … and an end typed by hand is still taken', t2 && t2.how === 'manual' && t2.sure === true && rel(byHand, t2.end) === 1800 && Math.abs(t2.tailSec - 200) < 1.5, t2 ? `${t2.how} ${rel(byHand, t2.end)}` : ''); }
+  check(`${n} records with fields of the wrong kind, missing fields, times out of order: nothing throws`, threw === 0, threw ? `${threw} threw — ${first}` : `slowest ${slowest.toFixed(0)} ms`);
+  check('  and none takes long', slowest < 500, `${slowest.toFixed(0)} ms`);
+}
+
 console.log(failures ? `\n${failures} FAILED` : '\nALL PASS'); process.exit(failures ? 1 : 0);

@@ -174,8 +174,10 @@ function hrSeries(session) {
    * seconds of that minute are still on the way up). null: never — the running did not resume.
    */
   const backAt = (from, tEnd, ref) => {
+    if (!n || !Number.isFinite(from)) return null;
     const R = RUN_END; const x = ref - R.backBpm; const i0 = lb(from); const C = new Int32Array(n - i0 + 1); for (let i = i0; i < n; i++) C[i - i0 + 1] = C[i - i0] + (V[i] >= x ? 1 : 0);
-    for (let u = from; u + 60000 <= tEnd; u += R.stepMs) {
+    const uEnd = Math.min(tEnd, T[n - 1] + 60000); // (no minute after the last sample can hold any)
+    for (let u = from; u + 60000 <= uEnd; u += R.stepMs) {
       const i = lb(u), j = lb(u + 60000); const k = j - i; if (k < 20 || 2 * (C[j - i0] - C[i - i0]) < k) continue;
       let v = u; while (v < u + 60000 && !(med(v - 10000, v + 10000, 5) >= ref - R.settleBpm)) v += R.stepMs;
       return Math.min(v, tEnd);
@@ -201,15 +203,18 @@ function hrSeries(session) {
  */
 function stopBefore(H, tA, tRec, tMin, scanMs = RUN_END.scanMs, anyLevel = false) {
   const R = RUN_END; const step = R.stepMs;
-  // the grid: tA + k·step, from 90 s after the anchor (inside the recording) back to the scan limit; m[k] = median of the 20 s before it
-  const kHi = Math.max(0, Math.min(Math.floor(R.afterMs / step), Math.floor((tRec - tA) / step))), kLo = -Math.floor((tA - Math.max(tMin, tA - scanMs)) / step);
-  if (!(kLo <= 0) || !Number.isFinite(kLo)) return null;
+  if (!H.n || !Number.isFinite(tA) || !Number.isFinite(tRec) || !Number.isFinite(tMin)) return null;
+  // the grid: tA + k·step, from 90 s after the anchor (inside the recording) back to the scan limit — and nowhere outside the heart-rate
+  // data (a record whose clock times lie far apart from its samples must not be walked through 5 s at a time); m[k] = median of the 20 s before it
+  const kHi = Math.min(Math.max(0, Math.min(Math.floor(R.afterMs / step), Math.floor((tRec - tA) / step))), Math.ceil((H.T[H.n - 1] + 20000 - tA) / step));
+  const kLo = -Math.floor((tA - Math.max(tMin, tA - scanMs, H.T[0])) / step);
+  if (!(kLo <= 0) || !Number.isFinite(kLo) || kHi < kLo) return null;
   const m = new Float64Array(kHi - kLo + 1); const at = k => tA + k * step;
   for (let k = kLo; k <= kHi; k++) m[k - kLo] = H.med(at(k) - 20000, at(k) + 1, 5);
   let lo = Infinity, loT = null; const see = k => { const v = m[k - kLo]; if (v < lo) { lo = v; loT = at(k); } };
   for (let k = kHi; k > 0; k--) see(k);
   const all = []; // candidates, the latest first
-  for (let k = 0; k >= kLo; k--) {
+  for (let k = Math.min(0, kHi); k >= kLo; k--) {
     see(k); const s = at(k);
     const last = H.med(s - 10000, s + 1, 3);
     if (!(last >= lo + R.dropBpm - R.bandBpm)) continue; // cannot be both at a level and dropBpm above the lowest point (saves the medians below for most of a tail)
@@ -293,7 +298,7 @@ const tlById = new Map();      // session id → the same, for the screens that 
  *   sure    – false: the end is shown but nothing is concluded from it. why = 'no-entry' (how = 'hr': nothing was logged around it),
  *             'two-steps' (the heart rate stepped down twice, minutes apart, before the value was typed), 'late-entry' (a value
  *             was typed long after the stop), 'shallow' (minutes after it the heart rate was still not far down: slowed, not
- *             stopped?), 'level' (the stop was found only at a level below the run)
+ *             stopped?), 'level' (the stop was found only at a level below the run), 'error' (the record could not be worked out)
  *   stops   – [from, to, resumed] stops inside the run (for a sample, or a Pause the heart rate confirms): from where the heart rate left
  *             its level, to where it was back at it; resumed = its lowest point, about where the running began again
  *   samples – the lactate values logged during the session with their role: 'rest' | 'mid' | 'end'
@@ -306,9 +311,26 @@ export function runTimeline(session) {
   const sig = `${session.type}|${session.startedAt}|${session.endedAt}|${hl.length}|${mid ? mid[0] + ':' + mid[1] : ''}|${lastHr ? lastHr[0] + ':' + lastHr[1] : ''}|${ev.length}|${lastEv ? lastEv.t + ':' + lastEv.type + ':' + (lastEv.value ?? '') : ''}|${session.runEndSec ?? ''}`;
   const hit = tlCache.get(session); if (hit && hit.sig === sig) return hit.tl;
   const id = session.id; const kept = id != null ? tlById.get(id) : null;
-  const entry = kept && kept.sig === sig ? kept : { sig, tl: buildTimeline(session) };
+  let entry = kept && kept.sig === sig ? kept : null;
+  if (!entry) {
+    let tl;
+    // Home, the session list and the session screen all come through here: one record this code did not foresee must not take them down.
+    try { tl = buildTimeline(session); } catch (e) { console.error('runTimeline: could not work out where the run ended', e); tl = plainTimeline(session); }
+    entry = { sig, tl };
+  }
   tlCache.set(session, entry); if (id != null) { tlById.delete(id); tlById.set(id, entry); if (tlById.size > 300) tlById.delete(tlById.keys().next().value); }
   return entry.tl;
+}
+/** What is left when the timeline cannot be worked out: the recording as it is, with nothing concluded from it (why = 'error') — unless the end was typed by hand. */
+function plainTimeline(session) {
+  const ev = Array.isArray(session.events) ? session.events : [], hl = Array.isArray(session.hrLive) ? session.hrLive : [];
+  let first = null, last = null; for (const p of hl) if (p && Number.isFinite(p[0])) { if (first == null) first = p[0]; last = p[0]; }
+  const t0 = Number.isFinite(session.startedAt) ? session.startedAt : (first ?? 0); const tRec = session.endedAt || (last ?? t0);
+  const manual = Number.isFinite(session.runEndSec) ? t0 + session.runEndSec * 1000 : null; const byHand = manual != null && manual > t0 && manual <= tRec + 1000;
+  const end = byHand ? Math.min(manual, tRec) : tRec; const dur = (tRec - t0) / 1000; const samples = [];
+  for (const e of ev) { if (!e || e.type !== 'lactate' || !Number.isFinite(e.t) || !Number.isFinite(e.value)) continue; const rel = (e.t - t0) / 1000; samples.push({ t: e.t, value: e.value, role: rel <= 240 ? 'rest' : (rel >= dur - 300 || rel >= dur * 0.85) ? 'end' : 'mid' }); }
+  samples.sort((a, b) => a.t - b.t);
+  return { t0, tRec, start: t0, end, how: byHand ? 'manual' : 'finish', sure: byHand, why: byHand ? null : 'error', bouts: session.type === 'lt2' ? 2 : 1, stops: [], samples, lagMs: 0, tailSec: Math.max(0, (tRec - end) / 1000), entryT: null };
 }
 function buildTimeline(session) {
   const R = RUN_END; const H = hrSeries(session); const ev = session.events || [];
