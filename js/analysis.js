@@ -123,22 +123,322 @@ function piecewise(xs, ys, k) {
   return best;
 }
 
-/** SmO2 breakpoints from stage means vs speed (2 breakpoints when ≥6 stages, else 1). */
+// ---------- Where the running stopped (verification card) ----------
+// A session is recorded until 종료 is pressed, but the run a lactate sample belongs to ends earlier: the belt stops, the finger is
+// pricked, the value is typed, and often a cool-down follows. Everything "at the end of the run" — last-5-min heart rate and α1,
+// drift, the SmO2 end slope, which sample is the end sample — has to be measured from where the running stopped.
+// The rule of this code: a stop is inferred only where something was logged (a lactate entry, Pause, the rep clock of an LT2
+// session); the heart rate is used to time it, because it leaves its level a few seconds after the belt stops. Where nothing was
+// logged the end is merely estimated, and then nothing is concluded from it (sure = false).
+const median = a => { const n = a.length; if (!n) return NaN; const s = Float64Array.from(a).sort(); const m = n >> 1; return n % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+
+/** Paused stretches [from, to] in ms, from the pause / resume events; a pause still open at the end closes there. */
+export function pauseIntervals(session) {
+  const ev = (session.events || []).filter(e => (e.type === 'pause' || e.type === 'resume' || e.type === 'stop') && Number.isFinite(e.t)).sort((a, b) => a.t - b.t);
+  const out = []; let from = null;
+  for (const e of ev) { if (e.type === 'pause') { if (from == null) from = e.t; } else if (from != null) { if (e.t > from) out.push([from, e.t]); from = null; } }
+  if (from != null) { const hl = session.hrLive; const end = session.endedAt || (hl && hl.length ? hl[hl.length - 1][0] : from); if (end > from) out.push([from, end]); }
+  return out;
+}
+
+export const RUN_END = {
+  bandBpm: 5,      // "still at its level": the last 10 s within this of the median of the 2 min before …
+  tightBpm: 2,     // … "really at it": within this
+  sinkBpm: 4,      // …and the second minute of those two not this far below the first (that would be a slope, not a level)
+  dropBpm: 10,     // a stop: afterwards the heart rate gets at least this far below that level …
+  fastBpm: 8,      // … and the minute that follows (from 30 s on) lies this far below it (a slow downward slide is not a stop)
+  backBpm: 5,      // running resumed: a whole minute back within this of the level …
+  settleBpm: 3,    // … and the stop is over once the heart rate itself is within this of it
+  climbBpm: 8,     // a level this far below an earlier one, or below the run so far, is not the run (walked first, then stood)
+  stepBpm: 6,      // a surge begins with a step up of at least this within a minute
+  reboundBpm: 15,  // between two values typed after one stop the heart rate came up this far again: the running had been taken up
+  stepMs: 5000, levelMs: 120000, scanMs: 720000, afterMs: 90000,
+  stepDownMs: 180000, // two steps down further apart than this: a cool-down, or running on at a lower speed? → shown, not relied on
+  assocMs: 300000, // a value typed later than this after a stop was over does not belong to that stop
+  runOnMs: 300000, // the last sample's stop still ends the run when no more than this much running followed it
+  lateMs: 360000,  // a value typed later than this after the stop it points to: the stop is shown, but not relied on
+  shallowMs: 120000, deepBpm: 25, // … and likewise when the value comes this long after the stop without the heart rate having been this far below the level (standing brings it there; a slower pace does not)
+  lagMs: 15000,    // an end timed by the heart rate is up to this late (the heart rate needs some seconds to leave its level)
+};
+
+function hrSeries(session) {
+  let src = (session.hrLive || []).filter(p => p && p[1] > 0 && Number.isFinite(p[0]));
+  for (let i = 1; i < src.length; i++) if (src[i][0] < src[i - 1][0]) { src.sort((a, b) => a[0] - b[0]); break; }
+  const n = src.length; const T = new Float64Array(n), V = new Float64Array(n); for (let i = 0; i < n; i++) { T[i] = src[i][0]; V[i] = src[i][1]; }
+  const lb = t => { let lo = 0, hi = n; while (lo < hi) { const m = (lo + hi) >> 1; if (T[m] < t) lo = m + 1; else hi = m; } return lo; }; // first sample at or after t
+  /** Median of the samples with a ≤ t < b; NaN when there are fewer than minN. */
+  const med = (a, b, minN) => { const i = lb(a), j = lb(b); const k = j - i; if (k < minN) return NaN; const w = V.slice(i, j).sort(); const m = k >> 1; return k % 2 ? w[m] : (w[m - 1] + w[m]) / 2; };
+  /**
+   * When was the heart rate back at `ref`? From `from` on: the first whole minute (inside the recording, ≥ 20 samples) of which at
+   * least half lies within backBpm of ref; from its start on, the first moment the heart rate itself is within settleBpm (the first
+   * seconds of that minute are still on the way up). null: never — the running did not resume.
+   */
+  const backAt = (from, tEnd, ref) => {
+    const R = RUN_END; const x = ref - R.backBpm; const i0 = lb(from); const C = new Int32Array(n - i0 + 1); for (let i = i0; i < n; i++) C[i - i0 + 1] = C[i - i0] + (V[i] >= x ? 1 : 0);
+    for (let u = from; u + 60000 <= tEnd; u += R.stepMs) {
+      const i = lb(u), j = lb(u + 60000); const k = j - i; if (k < 20 || 2 * (C[j - i0] - C[i - i0]) < k) continue;
+      let v = u; while (v < u + 60000 && !(med(v - 10000, v + 10000, 5) >= ref - R.settleBpm)) v += R.stepMs;
+      return Math.min(v, tEnd);
+    }
+    return null;
+  };
+  return { T, V, n, med, backAt };
+}
+
+/**
+ * The stop that goes with something logged at tA (a lactate entry, Pause).
+ * A candidate is a moment, at most scanMs before tA, at which the heart rate was still at its level (the last 10 s within bandBpm
+ * of the median of the 2 min before, and that level not already sinking) while, between there and tA (+90 s), it got dropBpm below
+ * the level, the minute that followed lying fastBpm below it. The latest candidate is the stop, unless the level it stands on was
+ * itself reached by such a drop from a level climbBpm higher, with no return in between (walked first, then stood): then the earlier
+ * one is — if less than stepDownMs lies between them, without question; otherwise the picture has two readings (a cool-down, or
+ * running on at a lower speed?) and the result is marked twoStep. A higher level that was only a surge, after which the running went
+ * on at the level before it, is not taken for the run.
+ * With nothing logged (tA = the end of the recording, anyLevel = true) there is no place to start from: the latest candidate counts,
+ * unless an earlier one stands clearly higher, and only if the heart rate never came back (after a surge: back to the level before it).
+ * → { stopT, level, troughT, backT, lowLevel?, twoStep? } or null. backT: when the heart rate was back at the level (null = the
+ * running did not resume). lowLevel: the stop was found only at a level well below the run so far.
+ */
+function stopBefore(H, tA, tRec, tMin, scanMs = RUN_END.scanMs, anyLevel = false) {
+  const R = RUN_END; const step = R.stepMs;
+  // the grid: tA + k·step, from 90 s after the anchor (inside the recording) back to the scan limit; m[k] = median of the 20 s before it
+  const kHi = Math.max(0, Math.min(Math.floor(R.afterMs / step), Math.floor((tRec - tA) / step))), kLo = -Math.floor((tA - Math.max(tMin, tA - scanMs)) / step);
+  if (!(kLo <= 0) || !Number.isFinite(kLo)) return null;
+  const m = new Float64Array(kHi - kLo + 1); const at = k => tA + k * step;
+  for (let k = kLo; k <= kHi; k++) m[k - kLo] = H.med(at(k) - 20000, at(k) + 1, 5);
+  let lo = Infinity, loT = null; const see = k => { const v = m[k - kLo]; if (v < lo) { lo = v; loT = at(k); } };
+  for (let k = kHi; k > 0; k--) see(k);
+  const all = []; // candidates, the latest first
+  for (let k = 0; k >= kLo; k--) {
+    see(k); const s = at(k);
+    const last = H.med(s - 10000, s + 1, 3);
+    if (!(last >= lo + R.dropBpm - R.bandBpm)) continue; // cannot be both at a level and dropBpm above the lowest point (saves the medians below for most of a tail)
+    const level = H.med(s - R.levelMs, s - 10000, 30);
+    if (!(last >= level - R.bandBpm)) continue;   // falling already, or no data
+    if (!(level - lo >= R.dropBpm)) continue;     // nothing between here and the anchor is far enough below
+    if (H.med(s - 65000, s - 10000, 15) < H.med(s - R.levelMs, s - 65000, 15) - R.sinkBpm) continue; // the "level" is a slope: this is inside a decline
+    const after = H.med(s + 30000, Math.min(s + 90000, tRec) + 1, 5); // the minute that follows (what there is of it; nothing yet → the drop above has to do)
+    if (Number.isFinite(after) && !(after <= level - R.fastBpm)) continue; // a slow slide or a blip, not a stop
+    all.push({ k, stopT: s, level, lo, troughT: loT, gap: level - last });
+  }
+  if (!all.length) return null;
+  // A slow decline (slowed to a jog) keeps the heart rate inside the band for half a minute: of the candidates on the same level in
+  // the minute before the chosen one, the latest that is really at the level (tightBpm) is the better time.
+  const tight = c => all.find(x => x.stopT <= c.stopT && x.stopT >= c.stopT - 60000 && Math.abs(x.level - c.level) <= R.settleBpm && x.gap <= R.tightBpm) || c;
+  // Was the level held up to time t a surge? It was if it lies climbBpm above the run up to there (its median from minute 3 on) and was
+  // reached by a step up within the last 8 min (the minute after stepBpm above the 2.5 min before; the slow upward drift of a long
+  // run is no step, and neither is its start). Then → the level of the run it rose from; otherwise null.
+  const surgeFrom = (t, level) => {
+    const body = H.med(tMin + 180000, t - 10000, 60); if (!(level - body >= R.climbBpm)) return null;
+    for (let u = t - 60000; u >= t - 480000; u -= 30000) { const a = H.med(u - 150000, u, 40); if (level - a >= R.climbBpm && H.med(u, u + 60000, 15) - a >= R.stepBpm) return body; }
+    return null;
+  };
+  const surgeBase = c => { if (c.base === undefined) c.base = surgeFrom(c.stopT, c.level); return c.base; };
+  if (anyLevel) {
+    for (let tries = 0; all.length && tries < 12; tries++) {
+      let best = all[0]; for (const c of all) if (c.level >= best.level + R.bandBpm) best = c;
+      const pick = tight(best); const ref = surgeBase(pick) ?? pick.level;
+      // the end of the run only if the heart rate stayed down: the rest of the recording lies fastBpm below (a wander back and forth does
+      // not), and it never came back for a whole minute (after a surge: back to the level before it — then the running simply went on)
+      if (H.med(pick.stopT + 30000, tRec + 1, 5) <= ref - R.fastBpm && H.backAt(pick.stopT + 30000, tRec, ref) == null) return { ...pick, backT: null };
+      all.splice(all.indexOf(best), 1);
+    }
+    return null;
+  }
+  // (the end of a surge after which the running went on at the old level — the heart rate never got dropBpm below that — is no stop at all)
+  let cur = all.find(c => { const base = surgeBase(c); return base == null || base - c.lo >= R.dropBpm; }), twoStep = false; if (!cur) return null;
+  for (;;) {
+    const up = all.find(c => c.stopT < cur.stopT && c.level >= cur.level + R.climbBpm); if (!up) break;
+    let peak = -Infinity; for (let k = up.k + 18; k <= cur.k; k++) { const v = m[k - kLo]; if (v > peak) peak = v; } // from 90 s after `up` (a slow step down needs that long to get clear of the level)
+    if (peak >= up.level - R.backBpm) break;      // in between the heart rate was back up there: `up` was an earlier stop of its own, not the top of a staircase
+    const base = surgeBase(up);
+    if (base != null && Math.abs(cur.level - base) <= R.climbBpm) break; // `up` ended a surge, and the running went on at the level before it
+    if (cur.stopT - up.stopT > R.stepDownMs) { twoStep = true; if (base != null) break; }
+    cur = up;
+  }
+  cur = tight(cur);
+  // Was the level it stopped from the level of the run? Not if it lies climbBpm below the run so far — or below a level held within
+  // the scan range before it (slowed down by degrees, with no step to find), unless that higher level was itself only a surge.
+  const body = H.med(tMin + 180000, cur.stopT - 10000, 60);
+  let top = -Infinity, topT = null; for (let t = cur.stopT; t >= Math.max(tMin + R.levelMs, cur.stopT - scanMs); t -= 30000) { const v = H.med(t - R.levelMs, t, 30); if (v > top) { top = v; topT = t; } }
+  const lowLevel = cur.level < body - R.climbBpm || (top - cur.level >= R.climbBpm && surgeFrom(topT, top) == null);
+  return { ...cur, twoStep, lowLevel, backT: H.backAt(cur.troughT, tRec, cur.level) };
+}
+/**
+ * Two values typed after the same stop are two fingers — unless the running was taken up again in between (a run given up a minute
+ * or two after the 10-min sample). Then the heart rate came up from its lowest point by reboundBpm or more and fell again, and the
+ * later value has a stop of its own: where that rise ended. → a stop like stopBefore's; { running, peakT } when the heart rate came
+ * up but not down again; null for two fingers.
+ */
+function reboundStop(H, ep, tFrom, tTo, tRec) {
+  const R = RUN_END; const pts = [];
+  for (let s = ep.stopT; s <= Math.min(tTo + R.afterMs, tRec); s += R.stepMs) { const v = H.med(s - 20000, s + 1, 5); if (Number.isFinite(v)) pts.push([s, v]); }
+  let lo = null; for (const p of pts) if (p[0] <= tTo && (!lo || p[1] < lo[1])) lo = p;                                    // the lowest point before the later value …
+  if (!lo) return null;
+  let hi = null; for (const p of pts) if (p[0] > Math.max(lo[0], tFrom) && p[0] <= tTo && (!hi || p[1] >= hi[1])) hi = p; // … the highest after it …
+  if (!hi || hi[1] - lo[1] < R.reboundBpm) return null;
+  let lo2 = null; for (const p of pts) if (p[0] > hi[0] && (!lo2 || p[1] < lo2[1])) lo2 = p;                             // … and down again?
+  const stopT = Math.max(lo[0], hi[0] - 10000); // (the 20-s median peaks some 10 s after the heart rate does)
+  if (!lo2 || hi[1] - lo2[1] < R.bandBpm) return { running: true, peakT: hi[0] }; // not (yet): the value was typed while running again, or in the first seconds after stopping
+  return { stopT, level: hi[1], lo: lo2[1], troughT: lo2[0], backT: H.backAt(lo2[0], tRec, hi[1]), rebound: true };
+}
+
+const tlCache = new WeakMap(); // session object → { sig, tl }
+const tlById = new Map();      // session id → the same, for the screens that read the sessions afresh from storage on every visit
+/**
+ * The timeline of a non-test session:
+ *   start   – where the run began (the session start; for an LT2 session the first / the last work phase)
+ *   end     – where the running stopped; how = 'sample' (heart-rate drop before a lactate entry) | 'pause' | 'manual' (session.runEndSec)
+ *             | 'phase' (rep clock of an LT2 session) | 'finish' (the recording ends at the running level) | 'hr' (estimate, nothing logged)
+ *   sure    – false: the end is shown but nothing is concluded from it. why = 'no-entry' (how = 'hr': nothing was logged around it),
+ *             'two-steps' (the heart rate stepped down twice, minutes apart, before the value was typed), 'late-entry' (a value
+ *             was typed long after the stop), 'shallow' (minutes after it the heart rate was still not far down: slowed, not
+ *             stopped?), 'level' (the stop was found only at a level below the run)
+ *   stops   – [from, to, resumed] stops inside the run (for a sample, or a Pause the heart rate confirms): from where the heart rate left
+ *             its level, to where it was back at it; resumed = its lowest point, about where the running began again
+ *   samples – the lactate values logged during the session with their role: 'rest' | 'mid' | 'end'
+ *   bouts   – work phases of an LT2 session (1 otherwise; 0 = ended in the warm-up; 2+ = intervals)
+ *   lagMs   – how late `end` may be (a heart-rate-timed end: the heart rate needs some seconds to leave its level)
+ */
+export function runTimeline(session) {
+  const hl = session.hrLive || [];
+  const ev = session.events || []; const mid = hl.length ? hl[hl.length >> 1] : null, lastHr = hl.length ? hl[hl.length - 1] : null, lastEv = ev.length ? ev[ev.length - 1] : null;
+  const sig = `${session.type}|${session.startedAt}|${session.endedAt}|${hl.length}|${mid ? mid[0] + ':' + mid[1] : ''}|${lastHr ? lastHr[0] + ':' + lastHr[1] : ''}|${ev.length}|${lastEv ? lastEv.t + ':' + lastEv.type + ':' + (lastEv.value ?? '') : ''}|${session.runEndSec ?? ''}`;
+  const hit = tlCache.get(session); if (hit && hit.sig === sig) return hit.tl;
+  const id = session.id; const kept = id != null ? tlById.get(id) : null;
+  const entry = kept && kept.sig === sig ? kept : { sig, tl: buildTimeline(session) };
+  tlCache.set(session, entry); if (id != null) { tlById.delete(id); tlById.set(id, entry); if (tlById.size > 300) tlById.delete(tlById.keys().next().value); }
+  return entry.tl;
+}
+function buildTimeline(session) {
+  const R = RUN_END; const H = hrSeries(session); const ev = session.events || [];
+  const t0 = Number.isFinite(session.startedAt) ? session.startedAt : (H.n ? H.T[0] : 0);
+  const tRec = session.endedAt || (H.n ? H.T[H.n - 1] : t0);
+  // LT2 sessions: the work phases the engine logged
+  let start = t0, firstWork = t0, phaseEnd = null, bouts = 1;
+  if (session.type === 'lt2') {
+    const ph = ev.filter(e => e.type === 'phase' && Number.isFinite(e.t)).sort((a, b) => a.t - b.t); const work = [];
+    for (let i = 0; i < ph.length; i++) if (ph[i].phase === 'work') work.push([ph[i].t, ph[i + 1] ? ph[i + 1].t : tRec]);
+    if (!ph.length) bouts = 2;            // no phase log (hand-made record): warm-up, reps and rests cannot be told apart → never one steady run
+    else if (!work.length) bouts = 0;     // ended in the warm-up
+    else { bouts = work.length; firstWork = work[0][0]; start = work[work.length - 1][0]; phaseEnd = work[work.length - 1][1]; }
+  }
+  const restLimit = Math.max(t0 + 240000, firstWork);
+  const lac = ev.filter(e => e.type === 'lactate' && Number.isFinite(e.t)).sort((a, b) => a.t - b.t);
+  // 1) the stops that something logged points to
+  const eps = []; const near = (t, tolMs) => eps.find(o => Math.abs(o.stopT - t) <= tolMs);
+  for (const e of lac) {
+    if (e.t <= restLimit) continue;
+    let ep = stopBefore(H, e.t, tRec, start);
+    if (ep && ep.backT != null && e.t - ep.backT > R.assocMs) ep = null; // that stop was over long before this value was typed: not this value's stop
+    if (!ep) continue;
+    const same = near(ep.stopT, 30000);
+    if (!same) { eps.push({ ...ep, src: 'sample', events: [e] }); continue; }
+    const rb = reboundStop(H, same, same.events.length ? same.events[same.events.length - 1].t : same.stopT, e.t, tRec); // a second finger, or typed after running again?
+    if (!rb) same.events.push(e);
+    else if (rb.running) { same.ranOn = true; if (same.backT == null) same.backT = rb.peakT; } // no stop of its own (yet): this value goes by the clock, and `same` did not end the run
+    else { const own = near(rb.stopT, 30000); if (own) own.events.push(e); else eps.push({ ...rb, src: 'sample', events: [e] }); }
+  }
+  for (const p of pauseIntervals(session)) {
+    const open = p[1] >= tRec - 1000; // Finish was pressed while paused
+    let ep = p[0] > start ? stopBefore(H, Math.min(p[1], p[0] + 120000), tRec, start) : null;
+    if (ep && ep.backT != null && ep.backT < p[0] - 60000) ep = null;        // a stop that was over before the Pause is not this Pause's
+    if (!ep && open && tRec - p[0] <= 90000) ep = { stopT: p[0], level: NaN, troughT: p[0], backT: null }; // Pause, then Finish within moments: too soon for the heart rate to show the stop
+    if (!ep) continue; // a Pause the heart rate does not confirm is not a stop (touched by accident, or the app was paused while the running went on)
+    const byPause = Math.abs(ep.stopT - p[0]) <= 60000 && p[0] <= ep.stopT; // Pause was pressed at the stop: its time is exact, the heart rate lags a few seconds
+    if (byPause) ep = { ...ep, stopT: p[0], exact: true };
+    const same = near(ep.stopT, 60000);
+    if (same) { if (ep.stopT < same.stopT) { same.stopT = ep.stopT; if (byPause) { same.src = 'pause'; same.exact = true; } } }
+    else eps.push({ ...ep, src: 'pause', events: [] });
+  }
+  eps.sort((a, b) => a.stopT - b.stopT);
+  for (let i = 0; i < eps.length - 1; i++) if (eps[i].backT == null || eps[i].backT > eps[i + 1].stopT) eps[i].backT = eps[i + 1].stopT; // the running between two stops never settled at the level: all of it belongs to the stop
+  // 2) where the run ended
+  const last = eps.length ? eps[eps.length - 1] : null;
+  const manual = Number.isFinite(session.runEndSec) ? t0 + session.runEndSec * 1000 : null;
+  let end = tRec, how = 'finish', sure = true, why = null, final = null;
+  if (manual != null && manual > start && manual <= tRec + 1000) { end = Math.min(manual, tRec); how = 'manual'; }
+  else if (last && !last.ranOn && (last.backT == null || (tRec - last.backT <= R.runOnMs && !lac.some(e => e.t > last.backT && !last.events.includes(e))))) {
+    // (the last stop ended the run if the running did not resume — or resumed for a few minutes at most, with nothing typed after it)
+    final = last; end = last.stopT; how = last.src;
+    // Relied on only when the picture has one reading: one clear stop, with the value typed soon after it.
+    const first = last.events[0]; // (a stop marked by Pause alone has none)
+    if (last.lowLevel) { sure = false; why = 'level'; }                                               // found only at a level below the run
+    else if (last.twoStep) { sure = false; why = 'two-steps'; }                                      // two steps down, minutes apart: which one ended the run?
+    else if (lac.some(e => e.t - last.stopT > R.lateMs)) { sure = false; why = 'late-entry'; }      // a value typed long after it: a cool-down in between — or running on at a lower speed?
+    else if (first && first.t - last.stopT >= R.shallowMs && last.level - last.lo < R.deepBpm) { sure = false; why = 'shallow'; } // minutes after it the heart rate has not been far down: slowed, not stopped?
+  } else {
+    // nothing logged marks the end: does the recording end at the running level?
+    const ep = stopBefore(H, tRec, tRec, start, Infinity, true);
+    const tail = ep ? ep.stopT : null;
+    if (phaseEnd != null && phaseEnd < tRec - 1000 && !(tail != null && tail < phaseEnd - 60000)) { end = phaseEnd; how = 'phase'; } // the rep clock ended the run (and the heart rate does not say it ended earlier)
+    else if (tail != null) { end = tail; how = 'hr'; sure = false; why = 'no-entry'; }
+  }
+  if (end < start) end = start;
+  const stops = eps.filter(o => o !== final && o.backT != null && o.stopT < end && o.backT > o.stopT).map(o => [o.stopT, Math.min(o.backT, end), Math.min(Math.max(o.troughT, o.stopT), o.backT, end)]);
+  // 3) what each logged value is
+  // (an end that is not relied on files nothing: there the clock of the recording decides, as it always did)
+  const endR = sure ? end : tRec; const dur = (endR - t0) / 1000; const tol = how === 'manual' ? 60000 : 0; const samples = [];
+  for (const e of lac) {
+    if (!Number.isFinite(e.value)) continue;
+    const own = eps.find(o => o.events.includes(e)); let role;
+    if (e.t <= restLimit) role = 'rest';
+    else if (sure && how !== 'finish' && e.t >= end - tol) role = 'end';             // taken after the running had stopped
+    else if (own && own !== final) role = 'mid';                                     // its own stop was followed by more running
+    else { const rel = (e.t - t0) / 1000; role = (rel >= dur - 300 || rel >= dur * 0.85) ? 'end' : 'mid'; } // no stop of its own: by the clock (last 5 min / 15 % of the run)
+    samples.push({ t: e.t, value: e.value, role });
+  }
+  const lagMs = how === 'hr' || (final && !final.exact) ? R.lagMs : 0; // how late the end may be: nothing for a time that was pressed, typed or logged
+  return { t0, tRec, start, end, how, sure, why, bouts, stops, samples, lagMs, tailSec: Math.max(0, (tRec - end) / 1000), entryT: final && final.events.length ? final.events[0].t : null };
+}
+/** Does a heart-rate value at time t belong to a stop (standing, or still on the way back up to the level)? */
+export function inStop(tl, t) { for (const s of tl.stops) if (t > s[0] && t < s[1]) return true; return false; }
+/**
+ * Does an α1 value stamped t contain beats that were not running? α1 is made of the beats of [t − windowMs, t]: tainted from a stop
+ * until windowMs after it, and in the seconds by which a heart-rate-timed stop (or the end of the run) may be late.
+ */
+export function alphaTainted(tl, t, windowMs) {
+  if (t > tl.end - tl.lagMs) return true;
+  for (const s of tl.stops) if (t > s[0] - RUN_END.lagMs && t <= s[1] + windowMs) return true;
+  return false;
+}
+/** Start of the window that holds `sec` seconds of running before tl.end (stops are skipped over), not earlier than tl.start. */
+export function runWindowStart(tl, sec) {
+  let t = tl.end, left = sec * 1000;
+  for (let i = tl.stops.length - 1; i >= 0; i--) { const s = tl.stops[i]; if (s[0] >= t) continue; const run = t - Math.min(s[1], t); if (run >= left) return Math.max(tl.start, t - left); left -= run; t = Math.min(t, s[0]); }
+  return Math.max(tl.start, t - left);
+}
+/** End of the window that holds `sec` seconds of running from `from` on (stops are skipped over). It may lie beyond the end of the run. */
+export function runWindowEnd(tl, from, sec) {
+  let t = from, left = sec * 1000;
+  for (const s of tl.stops) { if (s[1] <= t) continue; const run = Math.max(0, s[0] - t); if (run >= left) break; left -= run; t = Math.max(t, s[1]); }
+  return t + left;
+}
+/** Time (ms) inside [a, b] spent standing in the timeline's stops (a Pause counts only where the heart rate confirmed it). */
+export function stoppedMs(tl, a, b) { let sum = 0; for (const s of tl.stops) sum += Math.max(0, Math.min(b, s[2]) - Math.max(a, s[0])); return sum; }
+
 /**
  * Constant-load SmO2 steady-state summary (verification / LT1 / LT2 runs):
  * early window (5–10 min) vs last 5 min, end slope (%/min over the last 10 min), THb as contact quality.
  * steady = end slope > −0.3 %/min (SmO2 keeps falling at the end only above the sustainable domain).
+ * "End" is the end of the run (runTimeline), not of the recording: SmO2 rebounds within seconds of a stop, and a minute of that
+ * rebound inside the window turns a falling end slope into a rising one.
  */
 export function smo2Steady(session, { earlyFrom = 300, earlyTo = 600, endSec = 300, slopeSec = 600 } = {}) {
   const smo = session.smo2 && session.smo2.series; if (!smo || smo.length < 20) return null;
-  const off = session.smo2.offsetMs || 0; const t0 = session.startedAt;
-  const t1 = session.endedAt || (smo[smo.length - 1][0] + off);
-  const pts = smo.map(p => [p[0] + off, p[1], p[2]]).filter(p => p[0] >= t0 && p[0] <= t1 && Number.isFinite(p[1]));
+  const off = session.smo2.offsetMs || 0;
+  const tl = session.type !== 'test' && session.hrLive && session.hrLive.length ? runTimeline(session) : null; const one = !!tl && tl.bouts === 1;
+  const t0 = one ? tl.start : session.startedAt;
+  // An end timed by the heart rate is a few seconds late (the heart rate needs them to leave its level): keep clear of it.
+  const t1 = one && tl.how !== 'finish' ? tl.end - tl.lagMs : (session.endedAt || (smo[smo.length - 1][0] + off));
+  const stopped = t => { if (one) for (const s of tl.stops) if (t > s[0] && t < s[1] + 60000) return true; return false; }; // a stop and the minute of re-settling after it
+  const pts = smo.map(p => [p[0] + off, p[1], p[2]]).filter(p => p[0] >= t0 && p[0] <= t1 && Number.isFinite(p[1]) && !stopped(p[0]));
   if (pts.length < 20) return null;
   const sel = (a, b) => pts.filter(p => p[0] >= a && p[0] < b);
   const early = sel(t0 + earlyFrom * 1000, t0 + earlyTo * 1000), late = sel(t1 - endSec * 1000, t1 + 1), seg = sel(t1 - slopeSec * 1000, t1 + 1);
   const thb = pts.map(p => p[2]).filter(Number.isFinite);
-  const res = { n: pts.length, coverageSec: (pts[pts.length - 1][0] - pts[0][0]) / 1000, earlyMean: mean(early.map(p => p[1])), endMean: mean(late.map(p => p[1])), min: Math.min(...pts.map(p => p[1])), max: Math.max(...pts.map(p => p[1])), thbMean: mean(thb), thbMin: thb.length ? Math.min(...thb) : NaN, slopeEnd: NaN, drift: NaN, steady: null, contact: null };
+  let lo = Infinity, hi = -Infinity, thbLo = Infinity; for (const p of pts) { if (p[1] < lo) lo = p[1]; if (p[1] > hi) hi = p[1]; } for (const v of thb) if (v < thbLo) thbLo = v; // (a 10-Hz export of a long run is too many values for Math.min(...))
+  const res = { n: pts.length, coverageSec: (pts[pts.length - 1][0] - pts[0][0]) / 1000, earlyMean: mean(early.map(p => p[1])), endMean: mean(late.map(p => p[1])), min: lo, max: hi, thbMean: mean(thb), thbMin: thb.length ? thbLo : NaN, slopeEnd: NaN, drift: NaN, steady: null, contact: null };
   if (seg.length > 10) res.slopeEnd = linreg(seg.map(p => (p[0] - t1) / 60000), seg.map(p => p[1])).b;
   if (Number.isFinite(res.earlyMean) && Number.isFinite(res.endMean)) res.drift = res.endMean - res.earlyMean;
   if (Number.isFinite(res.slopeEnd)) res.steady = res.slopeEnd > -0.3;
