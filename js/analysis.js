@@ -22,28 +22,30 @@ export function summarizeStages(session, { a1WindowSec = 60, smo2WindowSec = 60 
   const feats = session.features || [];
   const smo = session.smo2 && session.smo2.series ? session.smo2.series : null;
   const off = session.smo2 ? (session.smo2.offsetMs || 0) : 0;
-  const out = [];
+  const out = []; const pauses = pauseIntervals(session);
+  const activeStart = (tEnd, sec, tMin) => activeWindowStart(pauses, tEnd, sec, tMin); // a pause stops the stage clock; its minutes are not part of the stage
   for (const st of session.stages || []) {
     if (!Number.isFinite(st.tEnd) || !Number.isFinite(st.tStart)) continue;
-    const w0 = Math.max(st.tStart, st.tEnd - a1WindowSec * 1000), w1 = st.tEnd;
-    const f = feats.filter(p => p.t >= w0 && p.t <= w1 && Number.isFinite(p.alpha1));
-    const fh = feats.filter(p => p.t >= w0 && p.t <= w1 && Number.isFinite(p.hr));
+    const w0 = activeStart(st.tEnd, a1WindowSec, st.tStart), w1 = st.tEnd;
+    const f = feats.filter(p => p.t >= w0 && p.t <= w1 && !p.paused && !inPause(pauses, p.t) && Number.isFinite(p.alpha1));
+    const fh = feats.filter(p => p.t >= w0 && p.t <= w1 && !p.paused && !inPause(pauses, p.t) && Number.isFinite(p.hr));
     // Prefer the strap's own HR (1 Hz) averaged over the window; fall back to the 2-min windowed HR of the features
     let hr = NaN;
-    if (session.hrLive && session.hrLive.length) { const h = session.hrLive.filter(p => p[0] >= w0 && p[0] <= w1 && p[1] > 0).map(p => p[1]); hr = mean(h); }
+    if (session.hrLive && session.hrLive.length) { const h = session.hrLive.filter(p => p[0] >= w0 && p[0] <= w1 && p[1] > 0 && !inPause(pauses, p[0])).map(p => p[1]); hr = mean(h); }
     if (!Number.isFinite(hr)) hr = mean(fh.map(p => p.hr));
     const row = {
       idx: st.idx, speed: st.speed, incline: st.incline, lactate: st.lactate, rpe: st.rpe,
-      durationSec: (st.tEnd - st.tStart) / 1000,
+      durationSec: (st.tEnd - st.tStart - overlapMs(pauses, st.tStart, st.tEnd)) / 1000,
       hr, alpha1: mean(f.map(p => p.alpha1)), alpha1n: f.length,
       artifactPct: mean(fh.map(p => p.artifactPct)),
       smo2: NaN, smo2Slope: NaN, thb: NaN,
     };
     if (smo && smo.length) {
-      const s0 = st.tEnd - smo2WindowSec * 1000;
-      const seg = smo.filter(p => p[0] + off >= s0 && p[0] + off <= st.tEnd);
+      const s0 = activeStart(st.tEnd, smo2WindowSec, -Infinity); // same rule as heart rate and α1: paused minutes are not part of the stage
+      const seg = smo.filter(p => p[0] + off >= s0 && p[0] + off <= st.tEnd && !inPause(pauses, p[0] + off));
       row.smo2 = mean(seg.map(p => p[1])); row.thb = mean(seg.map(p => p[2]).filter(isFinite));
-      const s2 = smo.filter(p => p[0] + off >= st.tEnd - 120000 && p[0] + off <= st.tEnd);
+      const s1 = activeStart(st.tEnd, 120, -Infinity);
+      const s2 = smo.filter(p => p[0] + off >= s1 && p[0] + off <= st.tEnd && !inPause(pauses, p[0] + off));
       if (s2.length > 10) { const r = linreg(s2.map(p => (p[0] + off - st.tEnd) / 60000), s2.map(p => p[1])); row.smo2Slope = r.b; }
     }
     out.push(row);
@@ -58,7 +60,7 @@ function crossingDescending(rows, key, level) {
     if (!Number.isFinite(a[key]) || !Number.isFinite(b[key])) continue;
     if (a[key] >= level && b[key] < level) {
       const t = (a[key] - level) / (a[key] - b[key]);
-      return { speed: a.speed + t * (b.speed - a.speed), hr: a.hr + t * (b.hr - a.hr), how: 'interp' };
+      return { speed: Number.isFinite(a.speed) && Number.isFinite(b.speed) ? a.speed + t * (b.speed - a.speed) : NaN, hr: a.hr + t * (b.hr - a.hr), how: 'interp' }; // stages without a speed (imported laps): unknown, not 0 km/h
     }
   }
   return null;
@@ -80,7 +82,7 @@ export function hrvThresholds(rows, { artifactLimit = 5 } = {}) {
     if (Number.isFinite(fit.b) && fit.b < 0) {
       const hr = (level - fit.a) / fit.b;
       if (hr >= hrMin - 5 && hr <= hrMax + 8) {
-        const speed = interp(valid.map(r => r.hr), valid.map(r => r.speed), hr);
+        const speed = valid.every(r => Number.isFinite(r.speed)) ? interp(valid.map(r => r.hr), valid.map(r => r.speed), hr) : NaN;
         return { hr, speed, how: 'regression', r2: fit.r2 };
       }
     }
@@ -123,25 +125,153 @@ function piecewise(xs, ys, k) {
   return best;
 }
 
-/** SmO2 breakpoints from stage means vs speed (2 breakpoints when ≥6 stages, else 1). */
+const median = a => { if (!a.length) return NaN; const s = a.slice().sort((x, y) => x - y); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+
+/** Paused stretches [from, to] in ms, from the session's pause / resume events; a pause still open at the end closes there. */
+export function pauseIntervals(session) {
+  const ev = (session.events || []).filter(e => e.type === 'pause' || e.type === 'resume' || e.type === 'stop').sort((a, b) => a.t - b.t);
+  const out = []; let from = null;
+  for (const e of ev) { if (e.type === 'pause') { if (from == null) from = e.t; } else if (from != null) { if (e.t > from) out.push([from, e.t]); from = null; } }
+  if (from != null) { const hl = session.hrLive; const end = session.endedAt ?? (hl && hl.length ? hl[hl.length - 1][0] : from); if (end > from) out.push([from, end]); }
+  return out;
+}
+const overlapMs = (iv, a, b) => iv.reduce((s, p) => s + Math.max(0, Math.min(p[1], b) - Math.max(p[0], a)), 0);
+const inPause = (iv, t) => { for (const p of iv) if (t > p[0] && t <= p[1]) return true; return false; }; // a sample stamped at the very instant of Pause was taken running, one at the instant of Resume standing
+/**
+ * Start of the window that holds `sec` seconds of unpaused time before tEnd, not earlier than tMin.
+ * pauses = pauseIntervals(session). Without pauses this is simply tEnd − sec.
+ */
+export function activeWindowStart(pauses, tEnd, sec, tMin = -Infinity) {
+  let t = tEnd, left = sec * 1000;
+  for (let i = pauses.length - 1; i >= 0; i--) { const p = pauses[i]; if (p[0] >= t) continue; if (p[1] <= tMin) break; const run = t - Math.min(p[1], t); if (run >= left) return Math.max(tMin, t - left); left -= run; t = Math.min(t, p[0]); }
+  return Math.max(tMin, t - left);
+}
+/** Paused time (ms) inside [a, b]. */
+export function pausedMsBetween(session, a, b) { return overlapMs(pauseIntervals(session), a, b); }
+/** Paused time (ms) that lies before time t. */
+export function pausedMsBefore(session, t) { return pausedMsBetween(session, -Infinity, t); }
+
+/**
+ * Where the running stopped in a constant-load recording.
+ * The app keeps recording while the runner stops the belt, draws blood and types the value, so a session
+ * usually ends one to three minutes after the exercise did — longer when a cool-down walk is left running.
+ * Heart rate marks the moment: it leaves the level it held and never comes back. "Last 5 min" windows must
+ * end there; anchored to the end of the recording they average recovery in, which lowers the heart rate and
+ * lifts SmO2.
+ *
+ * Method, on a 15-s running median of the strap's heart rate. For a boundary τ, the run level L(τ) is the
+ * 10th percentile of the 5 min before τ (brief dips such as a mid-run belt stop left out, so a short surge or
+ * a burst of false readings cannot raise it). τ counts as "the running had stopped" when
+ *   – from τ+30 s to the end of the recording the heart rate never returns to within bandBpm of L,
+ *   – for tails over 2 min it also stays holdBpm below L from τ+90 s on (standing or walking, not merely a slower pace),
+ *   – the last 20 s are dropShort below L (tails up to 2 min, still falling) rising to dropLong (4 min and more),
+ *   – and from τ+90 s on it does not come back to within nearBpm of the level held for most of the run up to τ
+ *     (a few fast minutes followed by more running at the usual pace are a surge, not the end of the run).
+ * The EARLIEST such τ (+10 s) is the end of the exercise: stop → stand → walk → stand is one tail, not three.
+ * A pace eased by less than ~15 bpm while still running is not an end; a belt slowed down in the last minute before stepping
+ * off puts the end at the slow-down.
+ * Built for what a verification run is: one load from the first minute to the stop (warm-up outside the recording).
+ * Limits — heart rate alone cannot tell these apart: a walk less than ~15 bpm below the running heart rate counts as running;
+ * a cool-down jog 25 bpm or more below the run counts as after it; a fast part that is longer than everything before it is taken
+ * for the run (warm-up → block → cool-down jog: the block); a recording whose "tail" is more than 1.5 × the run before it
+ * (fastest minutes at the start, or left recording for an hour) is left unresolved (how = 'end').
+ * Returns { t, tailSec, how } — how = 'hr' when a tail was found, else 'end' (t = end of the recording).
+ */
+const exEndCache = new WeakMap(); // hrLive array → { sig, res }: several screens ask for the same session
+const exEndById = new Map();      // session id → the same, for screens that read the sessions afresh from storage on every visit
+const exEndSig = session => { const h = session.hrLive; const last = h && h.length ? h[h.length - 1] : null; return `${session.startedAt}|${session.endedAt}|${h ? h.length : 0}|${last ? last[0] + ':' + last[1] : ''}`; };
+export function exerciseEnd(session, opts) {
+  if (opts || !session || !session.hrLive || typeof session.hrLive !== 'object') return findExerciseEnd(session || {}, opts || {});
+  const sig = exEndSig(session); let c = exEndCache.get(session.hrLive); if (c && c.sig === sig) return c.res;
+  c = session.id != null ? exEndById.get(session.id) : null;
+  if (!c || c.sig !== sig) { c = { sig, res: findExerciseEnd(session, {}) }; if (session.id != null) { if (exEndById.size >= 400) exEndById.delete(exEndById.keys().next().value); exEndById.set(session.id, c); } }
+  exEndCache.set(session.hrLive, c); return c.res;
+}
+function findExerciseEnd(session, { bandBpm = 5, holdBpm = 15, nearBpm = 8, dropShort = 12, dropLong = 25, stepSec = 5 } = {}) {
+  const hrs = (session.hrLive || []).filter(p => p && p[1] > 0);
+  const tEnd = session.endedAt || (hrs.length ? hrs[hrs.length - 1][0] : null);
+  const none = { t: tEnd, tailSec: 0, how: 'end' };
+  if (tEnd == null || hrs.length < 30) return none;
+  const t0 = session.startedAt ?? hrs[0][0];
+  if (tEnd - t0 < 300000) return none; // under 5 min: no steady level to compare with
+  const pts = hrs.filter(p => p[0] <= tEnd);
+  if (pts.length < 30 || tEnd - pts[pts.length - 1][0] > 30000) return none; // heart rate missing at the end: cannot tell
+  const T = pts.map(p => p[0]), H = pts.map(p => p[1]), n = T.length;
+  const sm = new Float64Array(n); let lo = 0, hi = 0;
+  for (let i = 0; i < n; i++) { while (T[lo] < T[i] - 7500) lo++; while (hi < n - 1 && T[hi + 1] <= T[i] + 7500) hi++; sm[i] = median(H.slice(lo, hi + 1)); }
+  const lastVals = H.filter((_, i) => T[i] >= tEnd - 20000); const hEnd = mean(lastVals.length ? lastVals : H.slice(-3));
+  const sufMax = new Float64Array(n); for (let i = n - 1; i >= 0; i--) sufMax[i] = i === n - 1 ? sm[i] : Math.max(sm[i], sufMax[i + 1]); // max of the smoothed series from i to the end
+  const firstIdxAtOrAfter = t => { let a = 0, b = n; while (a < b) { const m = (a + b) >> 1; if (T[m] < t) a = m + 1; else b = m; } return a; };
+  // Level of sm[a..b): lower decile of the values that are not more than 12 bpm below the median (dips such as a mid-run belt stop left out).
+  const levelOf = (a, b) => { const w = sm.slice(a, b).sort(); const m = w.length >> 1; const med = w.length % 2 ? w[m] : (w[m - 1] + w[m]) / 2; let k = 0; while (w[k] < med - 12) k++; return w[k + Math.floor(0.1 * (w.length - k - 1))]; };
+  const iRun0 = firstIdxAtOrAfter(t0 + 120000); // the first 2 min (heart rate still rising) say nothing about the level of the run
+  const stopped = tau => { // every rule but the surge rule; cheapest tests first (this runs for every 5 s of the recording)
+    const iPost = firstIdxAtOrAfter(tau + 30000); if (iPost >= n) return false;
+    const a = firstIdxAtOrAfter(tau - 300000), b = firstIdxAtOrAfter(tau + 1); if (b - a < 6 || T[b - 1] - T[a] < 60000) return false; // too little before τ to speak of a level
+    let top = -Infinity; for (let i = a; i < b; i++) if (sm[i] > top) top = sm[i];
+    if (sufMax[iPost] > top - bandBpm || hEnd > top - Math.min(dropShort, dropLong)) return false; // the level cannot exceed the window's maximum: no need to work it out
+    const L = levelOf(a, b);
+    if (sufMax[iPost] > L - bandBpm) return false;
+    const tail = (tEnd - tau) / 1000; const iHold = firstIdxAtOrAfter(tau + 90000);
+    if (tail > 120 && iHold < n && sufMax[iHold] > L - holdBpm) return false;
+    const need = tail <= 120 ? dropShort : tail >= 240 ? dropLong : dropShort + (dropLong - dropShort) * (tail - 120) / 120;
+    return hEnd <= L - need;
+  };
+  // Surge rule: from τ+90 s on (or, when the recording ends before that, in its last 20 s) the heart rate is back within nearBpm
+  // of the level held for most of the run up to τ → τ ended a few fast minutes, not the run.
+  const surgeEnd = tau => { const iHold = firstIdxAtOrAfter(tau + 90000), b = firstIdxAtOrAfter(tau + 1); return b - iRun0 >= 6 && (iHold < n ? sufMax[iHold] : hEnd) > levelOf(iRun0, b) - nearBpm; };
+  const cand = []; for (let tau = tEnd - 30000; tau >= t0 + 120000; tau -= stepSec * 1000) if (stopped(tau)) cand.push(tau); // latest first
+  let tauE = null; for (let i = cand.length - 1; i >= 0 && tauE == null; i--) if (!surgeEnd(cand[i])) tauE = cand[i]; // the earliest boundary wins
+  if (tauE == null) return none;
+  if (tEnd - tauE > 1.5 * (tauE - t0)) return none; // "tail" much longer than the run before it: more likely a fast start followed by the real run — not resolved
+  const t = Math.min(tauE + 10000, tEnd - 20000); const tailSec = (tEnd - t) / 1000;
+  return tailSec >= 20 ? { t, tailSec, how: 'hr' } : none;
+}
+
+/**
+ * The stretch of a non-test session that its end-of-run figures refer to.
+ *  – Free / LT1 sessions: from the start to where the running stopped (exerciseEnd).
+ *  – LT2 sessions (warm-up, reps, cool-down): the work phases the engine logged; t1 = end of the last rep.
+ * { t0, t1, lastStart, bouts, how: 'phase' | 'hr' | 'end', tailSec }. bouts > 1 = intervals: drift and the
+ * end-only MLSS proxy compare one part of a steady run with another and have no meaning across rests.
+ */
+export function workBout(session) {
+  const ex = exerciseEnd(session); const tRec = session.endedAt ?? ex.t;
+  if (session.type === 'lt2') {
+    const ph = (session.events || []).filter(e => e.type === 'phase').sort((a, b) => a.t - b.t); const work = [];
+    for (let i = 0; i < ph.length; i++) if (ph[i].phase === 'work') work.push([ph[i].t, ph[i + 1] ? ph[i + 1].t : null]);
+    if (work.length) {
+      const last = work[work.length - 1]; if (last[1] == null) last[1] = (ex.how === 'hr' && ex.t > last[0]) ? ex.t : tRec; // finished inside the last rep
+      return { t0: work[0][0], t1: last[1], lastStart: last[0], bouts: work.length, how: 'phase', tailSec: tRec != null ? Math.max(0, (tRec - last[1]) / 1000) : 0 };
+    }
+    return { t0: session.startedAt, t1: ex.t, lastStart: session.startedAt, bouts: 2, how: ex.how, tailSec: ex.tailSec }; // no phase log (hand-made record): warm-up and rests cannot be told apart, so never treated as one steady bout
+  }
+  return { t0: session.startedAt, t1: ex.t, lastStart: session.startedAt, bouts: 1, how: ex.how, tailSec: ex.tailSec };
+}
+
 /**
  * Constant-load SmO2 steady-state summary (verification / LT1 / LT2 runs):
  * early window (5–10 min) vs last 5 min, end slope (%/min over the last 10 min), THb as contact quality.
  * steady = end slope > −0.3 %/min (SmO2 keeps falling at the end only above the sustainable domain).
+ * "End" is the end of the run (workBout), not of the recording: SmO2 rebounds within seconds of stopping,
+ * and a minute of that rebound inside the window turns a falling end slope into a rising one.
  */
 export function smo2Steady(session, { earlyFrom = 300, earlyTo = 600, endSec = 300, slopeSec = 600 } = {}) {
   const smo = session.smo2 && session.smo2.series; if (!smo || smo.length < 20) return null;
-  const off = session.smo2.offsetMs || 0; const t0 = session.startedAt;
-  const t1 = session.endedAt || (smo[smo.length - 1][0] + off);
-  const pts = smo.map(p => [p[0] + off, p[1], p[2]]).filter(p => p[0] >= t0 && p[0] <= t1 && Number.isFinite(p[1]));
+  const off = session.smo2.offsetMs || 0;
+  const bout = workBout(session); const t0 = bout.t0 ?? session.startedAt; const t1 = bout.t1 ?? (smo[smo.length - 1][0] + off);
+  const pauses = pauseIntervals(session); // belt stopped for a sample with the app paused: SmO2 rebounds there within seconds
+  const pts = smo.map(p => [p[0] + off, p[1], p[2]]).filter(p => p[0] >= t0 && p[0] <= t1 && Number.isFinite(p[1]) && !inPause(pauses, p[0]));
   if (pts.length < 20) return null;
   const sel = (a, b) => pts.filter(p => p[0] >= a && p[0] < b);
   const early = sel(t0 + earlyFrom * 1000, t0 + earlyTo * 1000), late = sel(t1 - endSec * 1000, t1 + 1), seg = sel(t1 - slopeSec * 1000, t1 + 1);
   const thb = pts.map(p => p[2]).filter(Number.isFinite);
-  const res = { n: pts.length, coverageSec: (pts[pts.length - 1][0] - pts[0][0]) / 1000, earlyMean: mean(early.map(p => p[1])), endMean: mean(late.map(p => p[1])), min: Math.min(...pts.map(p => p[1])), max: Math.max(...pts.map(p => p[1])), thbMean: mean(thb), thbMin: thb.length ? Math.min(...thb) : NaN, slopeEnd: NaN, drift: NaN, steady: null, contact: null };
+  let mn = Infinity, mx = -Infinity; for (const p of pts) { if (p[1] < mn) mn = p[1]; if (p[1] > mx) mx = p[1]; } // loops, not Math.min(...): a 10-Hz export of a long run has tens of thousands of points
+  let thbMin = Infinity; for (const v of thb) if (v < thbMin) thbMin = v;
+  const res = { n: pts.length, coverageSec: (pts[pts.length - 1][0] - pts[0][0]) / 1000, earlyMean: mean(early.map(p => p[1])), endMean: mean(late.map(p => p[1])), min: mn, max: mx, thbMean: mean(thb), thbMin: thb.length ? thbMin : NaN, slopeEnd: NaN, drift: NaN, steady: null, contact: null, endT: t1, tailSec: bout.tailSec || 0, bouts: bout.bouts };
   if (seg.length > 10) res.slopeEnd = linreg(seg.map(p => (p[0] - t1) / 60000), seg.map(p => p[1])).b;
   if (Number.isFinite(res.earlyMean) && Number.isFinite(res.endMean)) res.drift = res.endMean - res.earlyMean;
-  if (Number.isFinite(res.slopeEnd)) res.steady = res.slopeEnd > -0.3;
+  if (Number.isFinite(res.slopeEnd) && bout.bouts === 1) res.steady = res.slopeEnd > -0.3; // across intervals with rests a slope says nothing about steadiness
   if (Number.isFinite(res.thbMean)) res.contact = res.thbMean >= 12 ? 'ok' : 'low';
   return res;
 }
@@ -168,6 +298,7 @@ export function estimateOffsetMs(sessionHr, importHr, { maxLagSec = 180, stepSec
   return { ...best, ok: best.mad < 2.5 };
 }
 
+/** SmO2 breakpoints from stage means vs speed (2 breakpoints when ≥6 stages, else 1). */
 export function smo2Breakpoints(rows) {
   const valid = rows.filter(r => Number.isFinite(r.smo2) && Number.isFinite(r.speed));
   const res = { bp1: null, bp2: null, points: valid.length, note: '', slopes: valid.map(r => ({ speed: r.speed, slope: r.smo2Slope })) };

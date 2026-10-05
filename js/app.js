@@ -11,7 +11,7 @@ import { importFile } from './importers.js';
 import { liveChart, timelineChart, stepTestChart, trendChart } from './charts.js';
 
 // ---------- defaults ----------
-export const APP_VERSION = '1.1.10'; // keep in sync with sw.js VERSION
+export const APP_VERSION = '1.1.11'; // keep in sync with sw.js VERSION
 const DEFAULTS = {
   profile: { birth: '1997-07-21', restHr: 52, maxHr: 188, maxHrMode: 'tanaka', lang: 'both', theme: 'system' },
   treadmill: { model: 'LTSXL', minSpeed: 0.8, maxSpeed: 18, speedStep: 0.1, maxIncline: 15, inclineStep: 0.5 },
@@ -22,6 +22,11 @@ const DEFAULTS = {
   zones: { lt1Hr: null, lt2Hr: null, lt1Speed: null, lt2Speed: null, source: '', grade: '', updatedAt: null, testSessionId: null },
 };
 const deepMerge = (a, b) => { const o = { ...a }; for (const k in b) o[k] = (b[k] && typeof b[k] === 'object' && !Array.isArray(b[k])) ? deepMerge(a[k] || {}, b[k]) : b[k]; return o; };
+/** A <select> stores text: give every setting whose default is a number its number type back ('10' + 10 would concatenate). */
+/** A private copy of the defaults. Merging into DEFAULTS itself shared its sub-objects with the live settings on a first run, so editing a setting rewrote the defaults and "Delete all data" then restored the edited values. */
+const freshDefaults = () => JSON.parse(JSON.stringify(DEFAULTS));
+const numericSetting = (g, k, val) => (typeof DEFAULTS[g]?.[k] === 'number' && typeof val === 'string' && val.trim() !== '' && Number.isFinite(Number(val))) ? Number(val) : val;
+const coerceSettings = st => { for (const g in DEFAULTS) for (const k in DEFAULTS[g]) if (st[g] && k in st[g]) st[g][k] = numericSetting(g, k, st[g][k]); return st; };
 
 const A = { settings: null, view: 'home', sessions: [], imports: [], engine: null, source: null, alerts: null, live: { chart: null, mode: 'test', sourceKind: 'ble', demoSpeed: 10, replay: null, replaySpeed: 10, minutes: 50 }, detail: null, charts: [] };
 
@@ -83,7 +88,7 @@ async function renderHome() {
       <div class="grid2" style="margin-top:10px"><button class="primary big" data-action="go-live" data-mode="${today.type === 'lt2' || today.type === 'tempo' ? 'lt2' : 'lt1'}" data-minutes="${today.minutes}">${t('start_session')}</button><button data-action="go-test">${t('start_test')}</button></div></div>`;
   } else html += `<div class="card"><p class="muted">${t('no_zones')}</p></div>`;
   if (ins.notes.length) { html += `<h2>${t('insights')}</h2><div class="card stack">` + ins.notes.map(n => `<div class="notice ${n.kind === 'retest' || n.kind === 'adjust' ? 'warn' : ''}"><span class="ko">${esc(n.ko)}</span><span class="en">${esc(n.en)}</span></div>`).join('') + '</div>'; }
-  if (last) { const m = sessionMetrics(last); html += `<h2>${t('last_session')}</h2><div class="card list-item" data-action="open-session" data-id="${last.id}"><div><div class="t">${typeLabel(last.type)} · ${fmtDate(last.startedAt)}</div><div class="s">${fmtClock(m.durationSec)} · HR ${n0(m.meanHr)} · α1 ${n2(m.meanAlpha1)}${last.type === 'test' && last.result ? ` · LT1 ${n0(last.result.lt1Hr)} / LT2 ${n0(last.result.lt2Hr)}` : ''}</div></div><div>›</div></div>`; }
+  if (last) { const m = last.metrics || sessionMetrics(last); html += `<h2>${t('last_session')}</h2><div class="card list-item" data-action="open-session" data-id="${last.id}"><div><div class="t">${typeLabel(last.type)} · ${fmtDate(last.startedAt)}</div><div class="s">${fmtClock(m.durationSec)} · HR ${n0(m.meanHr)} · α1 ${n2(m.meanAlpha1)}${last.type === 'test' && last.result ? ` · LT1 ${n0(last.result.lt1Hr)} / LT2 ${n0(last.result.lt2Hr)}` : ''}</div></div><div>›</div></div>`; }
   html += `<p class="small muted" style="margin-top:18px">${t('disclaimer')}</p>`;
   return html;
 }
@@ -132,7 +137,7 @@ function renderLive() {
     const connected = A.source && (A.source.status === 'connected');
     html += `<div class="grid2" style="margin-top:14px"><button class="big ${connected ? '' : 'primary'}" data-action="connect" ${connected ? 'disabled' : ''}>${connected ? t('connected') : t('connect')}</button><button class="big ${connected ? 'primary' : ''}" data-action="start" ${connected ? '' : 'disabled'}>${t('start')}</button></div>
       ${A.lastBleError ? `<p class="notice warn small" style="margin-top:10px">${esc(A.lastBleError)}</p>` : ''}
-      <div class="stats" style="margin-top:10px"><div>${t('hr')}<b id="pre-hr">${v.hr ?? '–'}</b></div><div>RR<b id="pre-rr">${v.samples}</b></div><div>${t('battery')}<b id="pre-batt">${A.source?.battery != null ? A.source.battery + '%' : '–'}</b></div><div>상태<b id="pre-status" style="font-size:0.8rem">${esc(v.source.status)}</b></div></div>`;
+      <div class="stats" style="margin-top:10px"><div>${t('hr')}<b id="pre-hr">${v.hr ?? '–'}</b></div><div>RR<b id="pre-rr">${v.rrSeen ?? 0}</b></div><div>${t('battery')}<b id="pre-batt">${A.source?.battery != null ? A.source.battery + '%' : '–'}</b></div><div>상태<b id="pre-status" style="font-size:0.8rem">${esc(v.source.status)}</b></div></div>`;
     return html;
   }
   // running / finished layout (updated in place)
@@ -167,9 +172,10 @@ function mountLive() {
 let liveStageSig = '';
 function updateLive(v) {
   updateConnChip(v);
+  // Lactate cues run on the session clock whichever tab of the app is showing (they used to wait until the Session tab was open again).
+  if (v.state === 'running' && v.mode === 'free' && A.live.cueSecs?.length && !v.paused) { for (const c of A.live.cueSecs) { const kW = c + ':w', kC = c + ':c'; if (v.elapsedSec >= c - 30 && v.elapsedSec < c && !A.live.cueFired.has(kW)) { A.live.cueFired.add(kW); A.alerts?.speak(VOICE.stage_warn(30), { key: 'cue-w' }); } if (v.elapsedSec >= c && !A.live.cueFired.has(kC)) { A.live.cueFired.add(kC); A.live.cueFired.add(kW); A.alerts?.cue(VOICE.free_cue(Math.round(c / 60)), { beep: 'triple', vib: [300, 100, 300, 100, 300] }); toast(`채혈 시간 / lactate sample now (${Math.round(c / 60)} min)`, 8000); } } }
   if (A.view !== 'live') return;
-  if (v.state !== 'running') { const h = $('#pre-hr'); if (h) { h.textContent = v.hr ?? '–'; $('#pre-rr').textContent = v.samples; $('#pre-status').textContent = v.source.status; if (A.source?.battery != null) $('#pre-batt').textContent = A.source.battery + '%'; } if (v.source.status === 'connected' && $('[data-action=start]')?.disabled) render(); return; }
-  if (v.mode === 'free' && A.live.cueSecs?.length && !v.paused) { for (const c of A.live.cueSecs) { const kW = c + ':w', kC = c + ':c'; if (v.elapsedSec >= c - 30 && v.elapsedSec < c && !A.live.cueFired.has(kW)) { A.live.cueFired.add(kW); A.alerts?.speak(VOICE.stage_warn(30), { key: 'cue-w' }); } if (v.elapsedSec >= c && !A.live.cueFired.has(kC)) { A.live.cueFired.add(kC); A.live.cueFired.add(kW); A.alerts?.cue(VOICE.free_cue(Math.round(c / 60)), { beep: 'triple', vib: [300, 100, 300, 100, 300] }); toast(`채혈 시간 / lactate sample now (${Math.round(c / 60)} min)`, 8000); } } }
+  if (v.state !== 'running') { const h = $('#pre-hr'); if (h) { h.textContent = v.hr ?? '–'; $('#pre-rr').textContent = v.rrSeen ?? 0; $('#pre-status').textContent = v.source.status; if (A.source?.battery != null) $('#pre-batt').textContent = A.source.battery + '%'; } if (A.source && A.source.status === 'connected' && $('[data-action=start]')?.disabled) render(); return; }
   if (!$('#lv-hr')) return;
   $('#lv-hr').textContent = v.hr ?? '–'; $('#lv-contact').textContent = v.contact === false ? '⚠ 접촉 없음' : '';
   const f = v.feature; const box = $('#lv-a1-box');
@@ -242,9 +248,10 @@ function bleErrorHint(e) {
 }
 async function connectSource() {
   const L = A.live; ensureEngine(); A.alerts.unlock();
+  A.lastBleError = null; // a new attempt: the hint from the previous failure must not stay on screen next to "Connected"
+  let src = null;
   try {
     if (A.source) { await A.source.disconnect(); A.source = null; }
-    let src;
     if (L.sourceKind === 'ble') { src = new HeartRateSource(); }
     else if (L.sourceKind === 'demo') { src = new DemoSource({ speed: L.demoSpeed }); src.profile = demoProfileForEngine(A.engine); }
     else { if (!L.replay) { toast(tx('replay_pick')); return; } src = new ReplaySource(L.replay.rr, { speed: L.replaySpeed, name: L.replay.filename }); }
@@ -252,8 +259,9 @@ async function connectSource() {
     src.on('status', () => { updateConnChip(); if (A.view === 'live' && A.engine.state !== 'running') render(); });
     src.on('battery', () => updateLive(A.engine.view()));
     await src.connect();
+    if (A.source !== src) return; // replaced or switched off while it was connecting
     A.lastBleError = null; toast(tx('connected'));
-  } catch (e) { console.error(e); A.source = null; A.lastBleError = `${e && e.name ? e.name + ': ' : ''}${bleErrorHint(e)}`; toast(`연결 실패 / Failed: ${e && e.name ? e.name : ''}`, 3000); render(); }
+  } catch (e) { if (src && A.source !== src) return; console.error(e); A.source = null; A.lastBleError = `${e && e.name ? e.name + ': ' : ''}${bleErrorHint(e)}`; toast(`연결 실패 / Failed: ${e && e.name ? e.name : ''}`, 3000); render(); }
 }
 async function startSession() {
   const eng = ensureEngine(); const L = A.live; const z = zonesObj();
@@ -263,6 +271,7 @@ async function startSession() {
   let targets = null;
   if (L.mode === 'lt1') { if (!z) { toast(tx('no_zones')); return; } targets = sessionTargets(z, 'lt1', { minutes: L.minutes, lt1Adjust: ins.lt1Adjust }); }
   if (L.mode === 'lt2') { if (!z) { toast(tx('no_zones')); return; } targets = sessionTargets(z, 'lt2'); }
+  eng.settings = A.settings; // (a restore or "delete all" may have replaced the object since the engine was created)
   eng.reset(); if (eng.source !== A.source) eng.setSource(A.source);
   const spEl = $('#sess-speed'), siEl = $('#sess-incline'); if (spEl) L.speed = spEl.value === '' ? null : +spEl.value; if (siEl) L.incline = siEl.value === '' ? null : +siEl.value;
   eng.configure({ mode: L.mode, protocol: A.settings.protocol, intervals: L.mode === 'lt2' ? L.lt2 : null, targets, meta: L.mode === 'test' ? null : { speed: L.speed ?? null, incline: L.incline ?? A.settings.protocol.incline } });
@@ -306,7 +315,7 @@ async function renderAnalysisList() {
   // multi-day lactate curve from verification runs
   const md = multiDayCurve(await store.listSessions(), { days: 60 }); A.multiDay = md;
   if (md.points.length) {
-    html += `<h2>다일 젖산 곡선 <span class="en">Multi-day lactate curve</span></h2><div class="card"><p class="small muted">일정 속도 세션의 종료 젖산을 모아 만든 곡선(최근 60일, 속도당 최신 1개). <span class="en">End-of-run lactate from constant-speed sessions (last 60 days, newest per speed).</span></p>
+    html += `<h2>다일 젖산 곡선 <span class="en">Multi-day lactate curve</span></h2><div class="card"><p class="small muted">일정 속도 세션의 종료 젖산을 모아 만든 곡선(최근 60일, 속도당 최신 1개, 데모 세션 제외). <span class="en">End-of-run lactate from constant-speed sessions (last 60 days, newest per speed, demo sessions excluded).</span></p>
       <div class="table-wrap"><table><thead><tr><th>km/h</th><th>La</th><th>HR</th><th>α1</th><th>날짜</th></tr></thead><tbody>${md.points.map(p => `<tr><td>${p.x}</td><td>${p.la}</td><td>${n0(p.hr)}</td><td>${n2(p.alpha1)}</td><td>${fmtDate(p.date).slice(5, 10)}</td></tr>`).join('')}</tbody></table></div>`;
     if (md.analysis) { const L1 = md.analysis.lt1Primary, L2 = md.analysis.lt2Primary; html += `<div class="thr-card" style="margin-top:10px"><div class="box"><div class="small muted">LT1 (baseline+0.5)</div><div class="v">${n0(L1.hr)}<small> bpm</small></div><div class="small">${n1(L1.x)} km/h</div></div><div class="box"><div class="small muted">LT2 (ModDmax)</div><div class="v">${n0(L2.hr)}<small> bpm</small></div><div class="small">${n1(L2.x)} km/h</div></div></div><p class="small muted" style="margin-top:6px">${t('grade')} ${md.grade} · ${md.points.length}점${md.points.length < 5 ? ' — 5점 이상(젖산 범위 2 mmol/L 이상)이면 B등급' : ''}</p><button class="primary block" style="margin-top:8px" data-action="apply-multiday" ${Number.isFinite(L1.hr) && Number.isFinite(L2.hr) ? '' : 'disabled'}>${t('apply_zones')}</button>`; }
     else html += `<p class="small muted" style="margin-top:6px">${md.points.length}/3 — 서로 다른 속도 3개 이상이면 곡선을 계산합니다. <span class="en">Need ≥3 different speeds to fit the curve.</span></p>`;
@@ -320,7 +329,7 @@ function itemHtml(s) { const m = s.metrics || {}; return `<div class="list-item"
 
 async function renderSessionDetail(id) {
   const s = await store.getSession(id); const v = $('#view'); if (!s) { v.innerHTML = '<p>not found</p>'; return; }
-  A.detail = s;
+  destroyCharts(); A.detail = s;
   const r = analyzeSession(s); const m = sessionMetrics(s); const z = zonesObj(); const txt = sessionSummaryText(s, m, z, r);
   let html = `<div class="row between"><button class="compact ghost" data-action="back">‹ ${t('sessions')}</button><div class="row"><button class="compact ghost" data-action="export-csv">${t('export_csv')}</button><button class="compact ghost danger" data-action="delete-session">${t('delete')}</button></div></div>
     <h3 style="margin-top:10px">${typeLabel(s.type)} · ${fmtDate(s.startedAt)}</h3><p class="small muted">${esc(s.sourceKind || '')} · ${fmtClock(m.durationSec)}${s.smo2?.series?.length ? ` · SmO2 ${esc(s.smo2.position || '')} (${s.smo2.series.length} pts, offset ${Math.round((s.smo2.offsetMs || 0) / 1000)} s · ${alignmentText(s.smo2)})` : ''}</p>
@@ -330,13 +339,18 @@ async function renderSessionDetail(id) {
     <div class="row" style="margin-top:10px"><button class="compact" data-action="attach-smo2">${t('attach_smo2')}</button>${s.smo2 ? `<label class="field grow">${t('offset')} (s) <input type="number" id="smo2-offset" value="${Math.round((s.smo2.offsetMs || 0) / 1000)}" step="5"></label>` : ''}<button class="compact" data-action="copy-summary">${t('copy_summary')}</button></div>`;
   if (s.type !== 'test') {
     const c = lactateChecks(s); const vd = lactateVerdict(s); const ew = endWindowStats(s, 300);
+    // what "the end" refers to: the heart-rate drop (Free / LT1 sessions recorded past the stop) or the session's own phase log (LT2 sessions)
+    const clk = tt => fmtClock(Math.max(0, (tt - s.startedAt) / 1000));
+    const endBasis = ew.how === 'hr' ? { ko: ` · 심박 하강으로 운동 종료 ${clk(ew.endT)} 추정 — 그 뒤 ${fmtClock(ew.tailSec)}(채혈·회복)은 계산에서 제외`, en: ` · end of the run estimated at ${clk(ew.endT)} from the heart-rate drop — the ${fmtClock(ew.tailSec)} after it (sampling / recovery) is left out` }
+      : ew.how === 'phase' ? { ko: ` · ${ew.bouts > 1 ? `반복 ${ew.bouts}회 중 마지막` : '반복 구간'} 종료 ${clk(ew.endT)} (세션 기록 기준, 워밍업·쿨다운 제외)`, en: ` · ${ew.bouts > 1 ? `last of ${ew.bouts} reps` : 'work block'} ended ${clk(ew.endT)} (from the session log; warm-up and cool-down left out)` }
+      : { ko: '', en: '' };
     html += `<h2>젖산 검증 <span class="en">Lactate verification</span></h2><div class="card">
       <div class="grid2"><label class="field">러닝머신 km/h<input type="number" step="0.1" id="vc-speed" value="${s.speed ?? ''}"></label><label class="field">경사 %<input type="number" step="0.5" id="vc-incline" value="${s.incline ?? ''}"></label></div>
       <label class="field" style="margin-top:8px">목적 / purpose<select id="vc-purpose"><option value="" ${!s.purpose ? 'selected' : ''}>자동 (종료 ≥ 3 → MLSS 규칙) / auto</option><option value="lt1" ${s.purpose === 'lt1' ? 'selected' : ''}>LT1 검증 / LT1 check</option><option value="mlss" ${s.purpose === 'mlss' ? 'selected' : ''}>MLSS(LT2) 검증 / MLSS check</option></select></label>
       <div class="grid3" style="margin-top:8px"><label class="field">안정 시 / rest<input type="number" step="0.1" id="vc-rest" value="${c.rest ?? ''}"></label><label class="field">10분 / mid<input type="number" step="0.1" id="vc-mid" value="${c.mid ?? ''}"></label><label class="field">종료 / end<input type="number" step="0.1" id="vc-end" value="${c.end ?? ''}"></label></div>
-      <p class="small muted" style="margin-top:6px">마지막 5분 평균: 심박 ${n0(ew.hr)} bpm · α1 ${n2(ew.alpha1)} <span class="en">Last-5-min mean: HR ${n0(ew.hr)} · α1 ${n2(ew.alpha1)}</span></p>
-      ${(() => { const ss = smo2Steady(s); if (!ss) return ''; const st = ss.steady == null ? '' : ss.steady ? '안정 상태 / steady' : '비정상 상태 — 계속 하락 / not steady — still falling'; return `<div class="notice ${ss.steady === false || ss.contact === 'low' ? 'warn' : ''}" style="margin-top:6px"><b>SmO₂</b> 5–10분 ${n1(ss.earlyMean)} % → 마지막 5분 ${n1(ss.endMean)} % (Δ ${Number.isFinite(ss.drift) ? (ss.drift > 0 ? '+' : '') + ss.drift.toFixed(1) : '–'}), 끝 10분 기울기 ${Number.isFinite(ss.slopeEnd) ? ss.slopeEnd.toFixed(2) : '–'} %/min → ${st}. THb ${n1(ss.thbMean)}${ss.contact === 'low' ? ' ⚠ 접촉 불량 의심 / poor contact?' : ''}<span class="en">SmO₂ 5–10 min ${n1(ss.earlyMean)} % → last 5 min ${n1(ss.endMean)} %, end slope ${Number.isFinite(ss.slopeEnd) ? ss.slopeEnd.toFixed(2) : '–'} %/min → ${ss.steady == null ? '' : ss.steady ? 'steady' : 'not steady'}</span></div>`; })()}
-      ${vd ? `<div class="notice ${vd.level === 'ok' ? '' : 'warn'}" style="margin-top:6px"><span class="ko">${esc(vd.ko)}</span><span class="en">${esc(vd.en)}</span></div>${(() => { const ch = verdictZoneChange(A.settings.zones, s, vd); return ch ? `<button class="compact" style="margin-top:8px" data-action="apply-verdict">존에 반영: ${esc(ch.ko)} <span class="en">Apply to zones</span></button>` : `<p class="small muted" style="margin-top:6px">현재 존(LT1 ${A.settings.zones?.lt1Hr ?? '–'} bpm @ ${A.settings.zones?.lt1Speed ?? '–'} · LT2 ${A.settings.zones?.lt2Hr ?? '–'} @ ${A.settings.zones?.lt2Speed ?? '–'})과 모순되지 않음 — 변경 없음 <span class="en">Consistent with current zones — nothing to change</span></p>`; })()}` : `<p class="small muted">종료 젖산을 입력하면 LT1/LT2 판정이 나옵니다. 세션 중 「젖산 입력」으로 기록한 값은 시각에 따라 자동 배치됩니다. <span class="en">Enter the end lactate to get a verdict; values logged during the session are placed automatically by time.</span></p>`}
+      <p class="small muted" style="margin-top:6px">${ew.bouts > 1 ? '마지막 반복의 끝 5분' : '마지막 5분'} 평균: 심박 ${n0(ew.hr)} bpm · α1 ${n2(ew.alpha1)}${endBasis.ko} <span class="en">${ew.bouts > 1 ? 'Last 5 min of the last rep' : 'Last-5-min mean'}: HR ${n0(ew.hr)} · α1 ${n2(ew.alpha1)}${endBasis.en}</span></p>
+      ${(() => { const ss = smo2Steady(s); if (!ss) return ''; const st = ss.bouts > 1 ? '인터벌 — 안정 판정 생략 / intervals — steadiness not judged' : ss.steady == null ? '–' : ss.steady ? '안정 상태 / steady' : '비정상 상태 — 계속 하락 / not steady — still falling'; return `<div class="notice ${ss.steady === false || ss.contact === 'low' ? 'warn' : ''}" style="margin-top:6px"><b>SmO₂</b> 5–10분 ${n1(ss.earlyMean)} % → 마지막 5분 ${n1(ss.endMean)} % (Δ ${Number.isFinite(ss.drift) ? (ss.drift > 0 ? '+' : '') + ss.drift.toFixed(1) : '–'}), 끝 10분 기울기 ${Number.isFinite(ss.slopeEnd) ? ss.slopeEnd.toFixed(2) : '–'} %/min → ${st}. THb ${n1(ss.thbMean)}${ss.contact === 'low' ? ' ⚠ 접촉 불량 의심 / poor contact?' : ''}<span class="en">SmO₂ 5–10 min ${n1(ss.earlyMean)} % → last 5 min ${n1(ss.endMean)} %, end slope ${Number.isFinite(ss.slopeEnd) ? ss.slopeEnd.toFixed(2) : '–'} %/min → ${ss.bouts > 1 ? 'intervals — steadiness not judged' : ss.steady == null ? '–' : ss.steady ? 'steady' : 'not steady'}</span></div>`; })()}
+      ${vd ? `<div class="notice ${vd.level === 'ok' ? '' : 'warn'}" style="margin-top:6px"><span class="ko">${esc(vd.ko)}</span><span class="en">${esc(vd.en)}</span></div>${(() => { if (vd.intervals) return ''; /* interval verdicts never touch the zones — the verdict itself says so */ const ch = verdictZoneChange(A.settings.zones, s, vd); return ch ? `<button class="compact" style="margin-top:8px" data-action="apply-verdict">존에 반영: ${esc(ch.ko)} <span class="en">Apply to zones</span></button>` : `<p class="small muted" style="margin-top:6px">현재 존(LT1 ${A.settings.zones?.lt1Hr ?? '–'} bpm @ ${A.settings.zones?.lt1Speed ?? '–'} · LT2 ${A.settings.zones?.lt2Hr ?? '–'} @ ${A.settings.zones?.lt2Speed ?? '–'})과 모순되지 않음 — 변경 없음 <span class="en">Consistent with current zones — nothing to change</span></p>`; })()}` : `<p class="small muted">종료 젖산을 입력하면 LT1/LT2 판정이 나옵니다. 세션 중 「젖산 입력」으로 기록한 값은 시각에 따라 자동 배치됩니다. <span class="en">Enter the end lactate to get a verdict; values logged during the session are placed automatically by time.</span></p>`}
     </div>`;
   }
   const evs = (s.events || []).filter(e => ['lactate', 'rpe', 'lap'].includes(e.type) && (s.type !== 'test' || e.type === 'lap'));
@@ -386,6 +400,7 @@ function exportSessionCsv(s) {
   L.push('# Treadmill Lab session export'); L.push(`# type,${s.type},start,${new Date(s.startedAt).toISOString()},source,${s.sourceKind || ''}`);
   L.push(`# end,${s.endedAt ? new Date(s.endedAt).toISOString() : ''},duration_s,${s.endedAt ? Math.round((s.endedAt - s.startedAt) / 1000) : ''},speed_kmh,${s.speed ?? ''},incline_pct,${s.incline ?? ''}`);
   const lc = lactateChecks(s); const vd = lactateVerdict(s);
+  if (s.type !== 'test') { const ew = endWindowStats(s, 300); L.push(`# exercise_end_s,${ew.endT ? Math.round((ew.endT - s.startedAt) / 1000) : ''},end_basis,${ew.how === 'hr' ? 'hr_drop' : ew.how === 'phase' ? 'phase_log' : 'recording_end'},work_bouts,${ew.bouts ?? ''},recovery_tail_excluded_s,${Math.round(ew.tailSec || 0)},last5min_hr_bpm,${n0(ew.hr)},last5min_alpha1,${n2(ew.alpha1)}`); }
   L.push(`# lactate_rest,${lc.rest ?? ''},lactate_mid,${lc.mid ?? ''},lactate_end,${lc.end ?? ''},verdict,${vd ? vd.level : ''},${vd ? '"' + vd.en.replace(/"/g, "'") + '"' : ''}`);
   const ss = smo2Steady(s); if (ss) L.push(`# smo2_early_pct,${n1(ss.earlyMean)},smo2_end_pct,${n1(ss.endMean)},smo2_drift,${Number.isFinite(ss.drift) ? ss.drift.toFixed(1) : ''},smo2_end_slope_pct_per_min,${Number.isFinite(ss.slopeEnd) ? ss.slopeEnd.toFixed(2) : ''},steady,${ss.steady == null ? '' : ss.steady},thb_mean,${n1(ss.thbMean)},contact,${ss.contact ?? ''}`);
   const ev = (s.events || []).filter(e => e.type === 'lactate' || e.type === 'rpe' || e.type === 'lap' || e.type === 'pause' || e.type === 'resume' || e.type === 'stop');
@@ -398,10 +413,10 @@ function exportSessionCsv(s) {
 
 // ---------- IMPORT ----------
 async function handleFiles(files) {
-  let made = 0;
+  let made = 0, restored = false;
   for (const file of files) {
     try {
-      if (/\.json$/i.test(file.name)) { const b = JSON.parse(await file.text()); const r = await store.importAll(b, { merge: true }); if (b.settings) { A.settings = deepMerge(DEFAULTS, b.settings); await saveSettings(); } toast(`복원 / restored: ${r.sessions} sessions, ${r.imports} imports`); made++; continue; }
+      if (/\.json$/i.test(file.name)) { const b = JSON.parse(await file.text()); const r = await store.importAll(b, { merge: true }); if (b.settings) { A.settings = coerceSettings(deepMerge(freshDefaults(), b.settings)); await saveSettings(); restored = true; } toast(`복원 / restored: ${r.sessions} sessions, ${r.imports} imports`); made++; continue; }
       const imp = await importFile(file);
       if (imp.source === 'rr-csv' || (imp.source === 'fit' && imp.rr && imp.rr.length > 100)) {
         const comp = computeFeaturesOffline(imp.rr, A.settings.alpha1, A.settings.alpha1.stepSec || 5);
@@ -421,7 +436,8 @@ async function handleFiles(files) {
       } else if (imp.source === 'fatmaxxer-features') { await store.putImport({ id: uid(), source: imp.source, filename: imp.filename, startedAt: imp.features[0]?.t, endedAt: imp.features[imp.features.length - 1]?.t, durationSec: ((imp.features[imp.features.length - 1]?.t || 0) - (imp.features[0]?.t || 0)) / 1000, features: imp.features, meta: {} }); made++; toast('FatMaxxer features imported'); }
     } catch (e) { console.error(e); toast(`가져오기 실패 / import failed: ${esc(file.name)} — ${esc(e.message)}`, 4000); }
   }
-  if (made) { await refreshLists(); if (A.view === 'analysis' && !A.param) render(); }
+  if (restored) { if (A.alerts) A.alerts.update(A.settings.alerts); if (A.engine && A.engine.state !== 'running') A.engine.settings = A.settings; }
+  if (made) { await refreshLists(); if (restored ? !(A.view === 'live' && A.engine?.state === 'running') : (A.view === 'analysis' && !A.param)) render(); } // after a restore every screen is stale (Settings kept showing the old values)
 }
 async function findOverlapSession(rec) { const all = await store.listSessions(); let best = null, bestOv = 0; for (const s of all) { if (!s.endedAt) continue; const ov = Math.min(rec.endedAt, s.endedAt) - Math.max(rec.startedAt, s.startedAt); if (ov > bestOv) { bestOv = ov; best = s; } } return bestOv > 0.5 * (rec.endedAt - rec.startedAt) ? best : null; }
 /** Build session.smo2 from an import record; align by heart rate when both sides carry HR (same H10). */
@@ -451,7 +467,7 @@ async function renderPlan() {
   const todayIdx = new Date().getDay();
   let html = `<div class="row between"><h2 style="margin:0">${tx('weekly_plan')} · ${tx('week')} ${week}${plan.recovery ? ' · 회복 / recovery' : ''}</h2><div class="row"><button class="compact ghost" data-action="week-prev">‹</button><button class="compact ghost" data-action="week-next">›</button></div></div>
     <div class="card" style="margin-top:10px">${[1, 2, 3, 4, 5, 6, 0].map(d => plan.days.find(x => x.day === d)).map(d => `<div class="plan-day"><div class="dow ${d.day === todayIdx ? 'today' : ''}">${DOW.ko[d.day]}<br><span class="small">${DOW.en[d.day]}</span></div><div><div class="type-${d.type}"><b>${esc(d.ko)}</b><span class="en">${esc(d.en)}</span></div><div class="small muted mono">${d.hr ? `${d.hr.hrLo}–${d.hr.hrHi} bpm` : ''}${d.structure ? ` · ${esc(d.structure.label.split(' / ')[0])}` : ''}</div></div><div class="mins">${d.minutes}′</div></div>`).join('')}
-      <p class="small muted" style="margin-top:8px">총 ${plan.totalMin}분 · 고강도 ${plan.hardPct}% · 지속시간은 매주 +10%, 4주째·8주째 회복주 / Total ${plan.totalMin} min · hard ${plan.hardPct}% · +10% per week, recovery on weeks 4 and 8</p>
+      <p class="small muted" style="margin-top:8px">총 ${plan.totalMin}분 · 고강도 ${plan.hardPct}% · 긴 LT1은 매주 +10분, 4주째·8주째 회복주 / Total ${plan.totalMin} min · hard ${plan.hardPct}% · long LT1 +10 min per week, recovery on weeks 4 and 8</p>
       <div class="row"><button class="compact" data-action="copy-plan">${t('copy_summary')}</button></div></div>`;
   html += `<h2>${t('zones_table')}</h2><div class="card"><div class="zone-list">${z.five.map((zz, i) => `<div class="zone-item"><div class="bar" style="background:var(--z${i + 1})"></div><div class="nm"><b>${zz.id}</b> ${esc(zz.ko)}<span class="en">${esc(zz.en)}</span></div><div class="rng">${zz.hrLo || '<'}${zz.hrLo ? '–' : ''}${zz.hrHi} bpm<br><span class="small muted">${Number.isFinite(zz.speedLo) || Number.isFinite(zz.speedHi) ? `${Number.isFinite(zz.speedLo) ? n1(zz.speedLo) : '<'}${Number.isFinite(zz.speedLo) && Number.isFinite(zz.speedHi) ? '–' : ''}${Number.isFinite(zz.speedHi) ? n1(zz.speedHi) : '+'} km/h` : ''}</span></div></div>`).join('')}</div>
     <p class="small muted" style="margin-top:8px">LT1 세션 목표 = LT1 −10~−3 bpm${ins.lt1Adjust ? ` (자동 조정 ${ins.lt1Adjust > 0 ? '+' : ''}${ins.lt1Adjust})` : ''} · LT2 세션 = LT2 ±3 bpm · 속도는 경사 1% 기준<span class="en">LT1 session = LT1 −10 to −3 bpm${ins.lt1Adjust ? ` (auto ${ins.lt1Adjust > 0 ? '+' : ''}${ins.lt1Adjust})` : ''} · LT2 session = LT2 ±3 bpm · speeds at 1% incline</span></p></div>`;
@@ -494,7 +510,8 @@ function renderSettings() {
       <li>종료 기준(젖산 ≥6 또는 RPE ≥17)에 닿으면 그 단계까지 하고 종료 → 쿨다운 걷기 <span class="muted">/ at the stop criterion finish that stage, then cool down walking</span></li>
       <li>끝나면 Train.Red 앱에서 CSV 내보내기 → 이 앱 분석 탭에서 가져오기(자동 연결) → 삼각측량 확인 → "존에 적용" <span class="muted">/ export the Train.Red CSV → import it in Analysis (auto-attaches) → check the triangulation → Apply</span></li>
     </ol></details></div>
-    <h2>${t('data')}</h2><div class="card stack"><button data-action="backup">${t('backup')}</button><button data-action="restore">${t('restore')}</button><button class="danger" data-action="clear-all">${t('clear_all')}</button><p class="small muted">모든 데이터는 이 폰의 브라우저 안에만 저장됩니다. 폰을 바꾸기 전 백업하세요.<span class="en">All data stays in this phone's browser. Back up before changing phones.</span></p></div>
+    <h2>${t('data')}</h2><div class="card stack"><button data-action="backup">${t('backup')}</button><button data-action="restore">${t('restore')}</button><button class="danger" data-action="clear-all">${t('clear_all')}</button><p class="small muted">모든 데이터는 이 폰의 브라우저 안에만 저장됩니다. 폰을 바꾸기 전 백업하세요.<span class="en">All data stays in this phone's browser. Back up before changing phones.</span></p>
+      <p class="small muted">${A.storagePersisted === true ? '저장소 보호: 켜짐 ✓ (브라우저가 공간 부족으로 지우지 않음)<span class="en">Storage protection: on ✓ (the browser will not evict this data when space runs low)</span>' : A.storagePersisted === false ? '저장소 보호: 꺼짐 — 폰 저장 공간이 부족하면 브라우저가 지울 수 있습니다. 홈 화면에 추가해 쓰고, 가끔 백업하세요.<span class="en">Storage protection: off — the browser may evict this data if the phone runs out of space. Use the home-screen app and back up now and then.</span>' : ''}</p></div>
     <div class="card stack" style="margin-top:14px"><div class="row between"><span class="small">Treadmill Lab <b>v${APP_VERSION}</b></span><button class="compact ghost" data-action="force-update">강제 업데이트 / force update</button></div><p class="small muted">새 버전이 적용되지 않을 때: 캐시를 지우고 다시 불러옵니다 (데이터는 유지).<span class="en">If an update doesn't appear: clears the app cache and reloads (your data is kept).</span></p></div>
     <p class="small muted" style="margin-top:14px">DFA α1 engine matches FatMaxxer alpha1v2 (Apache-2.0) · ${t('disclaimer')}</p>`;
 }
@@ -502,7 +519,7 @@ function mountSettings() { /* delegated listener registered once in init */ }
 async function onSettingsChange(e) {
   if (A.view !== 'settings') return;
   const el = e.target; const path = el.dataset.set; if (!path) return; const [g, k] = path.split('.');
-  const val = el.type === 'checkbox' ? el.checked : el.type === 'number' ? (el.value === '' ? null : +el.value) : el.value;
+  const val = el.type === 'checkbox' ? el.checked : el.type === 'number' ? (el.value === '' ? null : +el.value) : numericSetting(g, k, el.value);
   A.settings[g][k] = val; if (g === 'zones') { A.settings.zones.updatedAt = Date.now(); A.settings.zones.source = 'manual'; A.settings.zones.grade = 'manual'; }
   await saveSettings(); if (A.alerts) A.alerts.update(A.settings.alerts); if (A.engine) A.engine.settings = A.settings; toast(tx('saved'), 1200);
   if (path === 'profile.lang' || path === 'profile.maxHrMode' || path === 'profile.birth') render();
@@ -544,14 +561,14 @@ async function onViewClick(e) {
     case 'force-update': { try { if ('serviceWorker' in navigator) { for (const r of await navigator.serviceWorker.getRegistrations()) await r.unregister(); } if (window.caches) { for (const k of await caches.keys()) await caches.delete(k); } } catch (e) { console.warn(e); } location.reload(); break; }
     case 'backup': download(`treadmill-lab-backup_${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(await store.exportAll()), 'application/json'); break;
     case 'restore': A.pendingReplayPick = false; $('#file-input').click(); break;
-    case 'clear-all': confirmBox(t('clear_all') + '?', async () => { await store.clearAll(); A.settings = JSON.parse(JSON.stringify(DEFAULTS)); await saveSettings(); await refreshLists(); navigate('home'); }); break;
+    case 'clear-all': confirmBox(t('clear_all') + '?', async () => { await store.clearAll(); A.settings = freshDefaults(); await saveSettings(); if (A.alerts) A.alerts.update(A.settings.alerts); if (A.engine) A.engine.settings = A.settings; await refreshLists(); navigate('home'); }); break;
     default: break;
   }
 }
 
 // ---------- init ----------
 (async function init() {
-  const saved = await store.getSettings(); A.settings = deepMerge(DEFAULTS, saved || {});
+  const saved = await store.getSettings(); A.settings = coerceSettings(deepMerge(freshDefaults(), saved || {}));
   setLang(A.settings.profile.lang); applyTheme();
   await refreshLists();
   let v = 'home'; try { v = localStorage.getItem('tl.view') || 'home'; } catch (e) { /* ignore */ }
@@ -560,6 +577,8 @@ async function onViewClick(e) {
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
     try { const reg = await navigator.serviceWorker.register('./sw.js'); reg.addEventListener('updatefound', () => { const nw = reg.installing; nw && nw.addEventListener('statechange', () => { if (nw.state === 'installed' && navigator.serviceWorker.controller) { toast('새 버전이 있습니다 — 새로고침하세요 / Update available — reload', 6000); } }); }); } catch (e) { console.warn('sw', e); }
   }
+  // Ask the browser to keep this site's data (sessions live only in IndexedDB); Chrome decides without a prompt.
+  (async () => { try { if (navigator.storage && navigator.storage.persist) { A.storagePersisted = await navigator.storage.persisted(); if (!A.storagePersisted) A.storagePersisted = await navigator.storage.persist(); } } catch (e) { /* not supported */ } })(); // never blocks start-up
   window.addEventListener('beforeunload', ev => { if (A.engine && A.engine.state === 'running') { ev.preventDefault(); ev.returnValue = ''; } });
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && A.alerts?.wakeLock == null && A.engine?.state === 'running') A.alerts.keepAwake(true); });
   A.saveSettings = saveSettings; A.navigate = navigate; A.refreshLists = refreshLists;

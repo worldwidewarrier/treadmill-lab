@@ -1,12 +1,14 @@
 // Headless flows: LT1 session (demo), LT2 session (demo), replay of a FatMaxxer file, SmO2 attach, backup export.
 import { chromium } from '/opt/npm-tools/node_modules/playwright/index.mjs';
-import { readFileSync } from 'node:fs';
+import { mkdirSync } from 'node:fs'; import { tmpdir } from 'node:os';
+const SHOTS = process.env.TL_SHOTS || `${tmpdir()}/treadmill-lab-shots`; mkdirSync(SHOTS, { recursive: true }); // screenshots
+import { readFileSync, existsSync } from 'node:fs';
 const base = 'http://127.0.0.1:8765/';
 const browser = await chromium.launch();
 const ctx = await browser.newContext({ viewport: { width: 384, height: 604 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, colorScheme: 'dark', locale: 'ko-KR', timezoneId: 'Asia/Seoul', acceptDownloads: true });
 const page = await ctx.newPage(); const errors = [];
 page.on('pageerror', e => errors.push('pageerror: ' + e.message)); page.on('console', m => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
-const shot = (n) => page.screenshot({ path: `/tmp/claude-0/-home-claude/b7afc582-3385-59f9-b17f-772b43d6baaf/scratchpad/shots/${n}.png`, fullPage: true });
+const shot = (n) => page.screenshot({ path: `${SHOTS}/${n}.png`, fullPage: true });
 let fails = 0; const check = (n, c, d = '') => { console.log((c ? 'PASS ' : 'FAIL ') + n + (d ? '  ' + d : '')); if (!c) fails++; };
 await page.goto(base, { waitUntil: 'networkidle' }); await page.waitForSelector('#view .card');
 // seed zones directly
@@ -38,34 +40,39 @@ const ph = await page.evaluate(() => ({ phase: TL.engine.phase, rep: TL.engine.r
 check('LT2 intervals progressed to cooldown/done', ['cooldown', 'done'].includes(ph.phase), JSON.stringify(ph));
 await shot('22-lt2-live');
 await page.click('[data-action=stop]'); await page.click('.modal [data-x=yes]'); await page.waitForSelector('#tl-chart .uplot', { timeout: 10000 });
-// --- Replay of the user's FatMaxxer file at ×60 ---
-const csv = readFileSync('test/data/fatmaxxer_rr_123618.csv', 'utf8');
-await page.click('#nav button[data-view=live]'); await page.waitForSelector('#mode-seg');
-await page.click('#mode-seg button[data-mode=free]'); await page.click('#src-seg button[data-src=replay]'); await page.waitForSelector('#replay-speed');
-await page.evaluate(async (csv) => { const mod = await import('./js/importers.js'); const imp = mod.parseRrCsv(csv, 'rr_123618.csv'); TL.live.replay = { rr: imp.rr, filename: 'rr_123618.csv', durationSec: imp.durationSec }; TL.live.replaySpeed = 60; }, csv);
-await page.click('[data-action=connect]'); await page.waitForSelector('[data-action=start]:not([disabled])'); await page.click('[data-action=start]'); await page.waitForSelector('#lv-hr');
-await page.waitForTimeout(4500); // 178 s of data at ×60 ≈ 3 s → source ends → engine stops itself
-const st = await page.evaluate(async () => { const all = await (await import('./js/store.js')).store.listSessions(); const r = all.find(s => s.sourceKind === 'replay'); return { state: TL.engine.state, n: r ? r.rr.length : 0, feats: r ? r.features.length : 0, final: r?.final }; });
-check('replay consumed all RR and auto-saved', st.n === 225 && st.final === true && st.state !== 'running', JSON.stringify(st));
-// finished session must be saved: the engine stops itself on source end → UI should offer save; we call finalize via stop button if still visible
-if (await page.$('[data-action=stop]')) { await page.click('[data-action=stop]'); if (await page.$('.modal [data-x=yes]')) await page.click('.modal [data-x=yes]'); }
-await page.waitForTimeout(1500);
-const saved = await page.evaluate(() => TL.sessions.some(s => (s.sourceKind || '') === 'replay' && s.final));
-check('replay session saved', saved);
-// --- Attach SmO2: import Train.Red CSV, then attach to the replay session via modal ---
-await page.click('#nav button[data-view=analysis]'); await page.waitForSelector('[data-action=import]');
-await (await page.$('#file-input')).setInputFiles(['test/data/trainred_session.csv']); await page.waitForTimeout(1500);
-const sid = await page.evaluate(() => TL.sessions.find(s => (s.sourceKind || '') === 'replay')?.id);
-await page.evaluate((id) => document.querySelector(`[data-action=open-session][data-id="${id}"]`).click(), sid); await page.waitForSelector('[data-action=attach-smo2]');
-await page.click('[data-action=attach-smo2]'); await page.waitForSelector('.modal [data-imp]'); await page.click('.modal [data-imp]'); await page.waitForTimeout(1500);
-const sm = await page.evaluate(() => ({ n: TL.detail.smo2?.series?.length, off: TL.detail.smo2?.offsetMs }));
-check('SmO2 attached to session', sm.n === 15561, JSON.stringify(sm));
-await shot('23-smo2-attached');
+// --- Replay of the user's FatMaxxer file + SmO2 attach: need the owner's private exports (test/data/README.md) ---
+const havePrivate = existsSync('test/data/fatmaxxer_rr_123618.csv') && existsSync('test/data/trainred_session.csv');
+if (!havePrivate) console.log('SKIP replay + SmO2 attach (private fixtures not present)');
+if (havePrivate) {
+  // --- Replay of the user's FatMaxxer file at ×60 ---
+  const csv = readFileSync('test/data/fatmaxxer_rr_123618.csv', 'utf8');
+  await page.click('#nav button[data-view=live]'); await page.waitForSelector('#mode-seg');
+  await page.click('#mode-seg button[data-mode=free]'); await page.click('#src-seg button[data-src=replay]'); await page.waitForSelector('#replay-speed');
+  await page.evaluate(async (csv) => { const mod = await import('./js/importers.js'); const imp = mod.parseRrCsv(csv, 'rr_123618.csv'); TL.live.replay = { rr: imp.rr, filename: 'rr_123618.csv', durationSec: imp.durationSec }; TL.live.replaySpeed = 60; }, csv);
+  await page.click('[data-action=connect]'); await page.waitForSelector('[data-action=start]:not([disabled])'); await page.click('[data-action=start]'); await page.waitForSelector('#lv-hr');
+  await page.waitForTimeout(4500); // 178 s of data at ×60 ≈ 3 s → source ends → engine stops itself
+  const st = await page.evaluate(async () => { const all = await (await import('./js/store.js')).store.listSessions(); const r = all.find(s => s.sourceKind === 'replay'); return { state: TL.engine.state, n: r ? r.rr.length : 0, feats: r ? r.features.length : 0, final: r?.final }; });
+  check('replay consumed all RR and auto-saved', st.n === 225 && st.final === true && st.state !== 'running', JSON.stringify(st));
+  // finished session must be saved: the engine stops itself on source end → UI should offer save; we call finalize via stop button if still visible
+  if (await page.$('[data-action=stop]')) { await page.click('[data-action=stop]'); if (await page.$('.modal [data-x=yes]')) await page.click('.modal [data-x=yes]'); }
+  await page.waitForTimeout(1500);
+  const saved = await page.evaluate(() => TL.sessions.some(s => (s.sourceKind || '') === 'replay' && s.final));
+  check('replay session saved', saved);
+  // --- Attach SmO2: import Train.Red CSV, then attach to the replay session via modal ---
+  await page.click('#nav button[data-view=analysis]'); await page.waitForSelector('[data-action=import]');
+  await (await page.$('#file-input')).setInputFiles(['test/data/trainred_session.csv']); await page.waitForTimeout(1500);
+  const sid = await page.evaluate(() => TL.sessions.find(s => (s.sourceKind || '') === 'replay')?.id);
+  await page.evaluate((id) => document.querySelector(`[data-action=open-session][data-id="${id}"]`).click(), sid); await page.waitForSelector('[data-action=attach-smo2]');
+  await page.click('[data-action=attach-smo2]'); await page.waitForSelector('.modal [data-imp]'); await page.click('.modal [data-imp]'); await page.waitForTimeout(1500);
+  const sm = await page.evaluate(() => ({ n: TL.detail.smo2?.series?.length, off: TL.detail.smo2?.offsetMs }));
+  check('SmO2 attached to session', sm.n === 15561, JSON.stringify(sm));
+  await shot('23-smo2-attached');
+}
 // --- backup download ---
 await page.click('#nav button[data-view=settings]'); await page.waitForSelector('[data-action=backup]');
 const [dl] = await Promise.all([page.waitForEvent('download'), page.click('[data-action=backup]')]);
 const path = await dl.path(); const json = JSON.parse(readFileSync(path, 'utf8'));
-check('backup JSON contains sessions', json.app === 'treadmill-lab' && json.sessions.length >= 3, `${json.sessions.length} sessions, ${json.imports.length} imports`);
+check('backup JSON contains sessions', json.app === 'treadmill-lab' && json.sessions.length >= (havePrivate ? 3 : 2), `${json.sessions.length} sessions, ${json.imports.length} imports`);
 // language switch to English only
 await page.selectOption('[data-set="profile.lang"]', 'en'); await page.waitForTimeout(300);
 check('English-only renders', (await page.textContent('#view')).includes('Profile'));

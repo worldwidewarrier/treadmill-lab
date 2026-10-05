@@ -1,8 +1,21 @@
 // Zones, weekly plan, progression, auto-adjustments, lactate verification runs and rule-based summaries (KO/EN).
 import { analyzeLactate } from './lactate.js';
-import { smo2Steady } from './analysis.js';
+import { smo2Steady, workBout, pauseIntervals, activeWindowStart } from './analysis.js';
 const r1 = v => Math.round(v * 10) / 10;
 const mean = a => a.length ? a.reduce((s, v) => s + v, 0) / a.length : NaN;
+/**
+ * Level of a heart-rate window for the drift comparison: the plain mean — unless the window holds a dip (3 % or more of its
+ * samples lie more than 15 bpm under its 70th percentile: the belt was stopped for a sample). Then the mean of the values from
+ * 8 bpm under that percentile upwards, which leaves out the stop and the climb back. A steady stretch never triggers this.
+ */
+const runLevel = a => {
+  if (!a.length) return NaN;
+  const s = a.slice().sort((x, y) => x - y); const c = s[Math.floor(0.7 * (s.length - 1))];
+  let low = 0; while (low < s.length && s[low] < c - 15) low++;
+  return low >= Math.max(2, 0.03 * s.length) ? mean(a.filter(v => v >= c - 8)) : mean(a);
+};
+const inPause = (iv, t) => { for (const p of iv) if (t > p[0] && t <= p[1]) return true; return false; }; // a sample stamped at the very instant of Pause was taken running, one at the instant of Resume standing
+const pausedMs = (iv, a, b) => iv.reduce((s, p) => s + Math.max(0, Math.min(p[1], b) - Math.max(p[0], a)), 0);
 
 /** Training zones from LT1/LT2 (HR and treadmill speed at the test incline). */
 export function computeZones(z) {
@@ -70,26 +83,33 @@ export function weeklyPlan({ zones, week = 1, weekdayMin = 60, weekendMin = 150,
 
 /** Per-session metrics used by insights and summaries. */
 export function sessionMetrics(session) {
+  // Drift and α1 describe the run itself: for Free / LT1 sessions up to where the running stopped (the recording usually goes on
+  // while the lactate sample is taken), for a single LT2 rep that rep. Across intervals with rests drift has no meaning (NaN).
+  const bout = session.type === 'test' ? null : workBout(session); const cut = bout && bout.how !== 'end' && bout.t1 != null ? bout.t1 : Infinity;
+  const pauses = pauseIntervals(session);
   const feats = (session.features || []).filter(f => !f.paused);
-  const work = feats.filter(f => f.phase === 'work' || session.type === 'free');
+  const work = feats.filter(f => (f.phase === 'work' || session.type === 'free') && !(f.t > cut));
   const a1 = work.map(f => f.alpha1).filter(v => Number.isFinite(v));
-  const hrs = (session.hrLive || []).filter(p => p[1] > 0);
+  const hrsAll = (session.hrLive || []).filter(p => p[1] > 0);
+  const from = bout && bout.how === 'phase' ? bout.t0 : -Infinity;
+  const hrs = bout && bout.bouts > 1 ? [] : hrsAll.filter(p => p[0] >= from && p[0] <= cut && !inPause(pauses, p[0]));
   const n = hrs.length; const third = Math.floor(n / 3);
-  // Cardiac drift: last third vs first third, excluding the first 5 min (ramp-up) when the session is long enough (≥ 15 min).
-  const tStart = session.startedAt ?? (hrs.length ? hrs[0][0] : 0); const tLast = hrs.length ? hrs[hrs.length - 1][0] : 0;
+  // Cardiac drift: last third vs first third, excluding the first 5 min (ramp-up) when the run is long enough (≥ 15 min).
+  const tStart = bout && bout.how === 'phase' ? bout.t0 : (session.startedAt ?? (hrs.length ? hrs[0][0] : 0)); const tLast = hrs.length ? hrs[hrs.length - 1][0] : 0;
   const skip = (tLast - tStart) >= 15 * 60000 ? 5 * 60000 : 0;
   const firstWin = hrs.filter(p => p[0] >= tStart + skip && p[0] < tStart + skip + (tLast - tStart - skip) / 3);
   const hr1 = firstWin.length ? mean(firstWin.map(p => p[1])) : (third ? mean(hrs.slice(0, third).map(p => p[1])) : NaN), hr3 = third ? mean(hrs.slice(n - third).map(p => p[1])) : NaN;
   const art = feats.length ? mean(feats.map(f => f.artifactPct)) : NaN;
-  const endT = session.endedAt || (hrs.length ? hrs[hrs.length - 1][0] : (feats.length ? feats[feats.length - 1].t : null));
+  const endT = session.endedAt || (hrsAll.length ? hrsAll[hrsAll.length - 1][0] : (feats.length ? feats[feats.length - 1].t : null));
   const dur = endT && session.startedAt ? Math.max(0, (endT - session.startedAt - (session.pauseMs || 0)) / 1000) : 0;
-  const tiz = session.tiz && session.tiz.totalSec ? 100 * session.tiz.inSec / session.tiz.totalSec : NaN;
-  return { durationSec: dur, meanHr: n ? mean(hrs.map(p => p[1])) : NaN, maxHr: n ? Math.max(...hrs.map(p => p[1])) : NaN, meanAlpha1: mean(a1), pctAlphaAbove75: a1.length ? 100 * a1.filter(v => v >= 0.75).length / a1.length : NaN, minAlpha1: a1.length ? Math.min(...a1) : NaN, driftPct: Number.isFinite(hr1) && hr1 ? 100 * (hr3 / hr1 - 1) : NaN, artifactPct: art, timeInZonePct: tiz, rrCount: (session.rr || []).length };
+  const tz = session.tiz; const tiz = tz && typeof tz.inSec === 'number' && typeof tz.totalSec === 'number' && tz.totalSec > 0 ? 100 * tz.inSec / tz.totalSec : NaN; // strings = a session recorded while the update interval was stored as text
+  const nAll = hrsAll.length; let maxHr = -Infinity; for (const p of hrsAll) if (p[1] > maxHr) maxHr = p[1];
+  return { durationSec: dur, meanHr: nAll ? mean(hrsAll.map(p => p[1])) : NaN, maxHr: nAll ? maxHr : NaN, meanAlpha1: mean(a1), pctAlphaAbove75: a1.length ? 100 * a1.filter(v => v >= 0.75).length / a1.length : NaN, minAlpha1: a1.length ? Math.min(...a1) : NaN, driftPct: Number.isFinite(hr1) && hr1 ? 100 * (hr3 / hr1 - 1) : NaN, artifactPct: art, timeInZonePct: tiz, rrCount: (session.rr || []).length, tailSec: bout && bout.how !== 'end' ? bout.tailSec : 0 };
 }
 
 /** Auto-adjustment rules from recent LT1 sessions (last 14 days) and test age. */
 export function assessRecent(sessions, zones, lastTestAt) {
-  const now = Date.now(); const recent = sessions.filter(s => s.type === 'lt1' && s.final && now - s.startedAt < 14 * 86400000);
+  const now = Date.now(); const recent = sessions.filter(s => s.type === 'lt1' && s.final && s.sourceKind !== 'demo' && now - s.startedAt < 14 * 86400000); // practice runs on the virtual strap never adjust real targets
   const notes = []; let lt1Adjust = 0; let holdDuration = false;
   const m = recent.map(sessionMetrics).filter(x => Number.isFinite(x.meanAlpha1));
   if (m.length >= 2) {
@@ -143,13 +163,15 @@ export function claudeSummary({ profile, zones, session, metrics, analysis, plan
     if (metrics) L.push(`Metrics: mean HR ${Math.round(metrics.meanHr)}, max HR ${metrics.maxHr}, mean α1 ${Number.isFinite(metrics.meanAlpha1) ? metrics.meanAlpha1.toFixed(2) : 'n/a'}, min α1 ${Number.isFinite(metrics.minAlpha1) ? metrics.minAlpha1.toFixed(2) : 'n/a'}, α1≥0.75 ${Number.isFinite(metrics.pctAlphaAbove75) ? Math.round(metrics.pctAlphaAbove75) + '%' : 'n/a'}, HR drift ${Number.isFinite(metrics.driftPct) ? metrics.driftPct.toFixed(1) + '%' : 'n/a'}, artifacts ${Number.isFinite(metrics.artifactPct) ? metrics.artifactPct.toFixed(1) + '%' : 'n/a'}, time in zone ${Number.isFinite(metrics.timeInZonePct) ? Math.round(metrics.timeInZonePct) + '%' : 'n/a'}`);
     if (session.type !== 'test') {
       const c = lactateChecks(session); const v = lactateVerdict(session); const ew = endWindowStats(session, 300); const px = endOnlyProxy(session);
-      L.push(`Constant load (${session.purpose || 'auto'}): speed ${session.speed ?? '?'} km/h, incline ${session.incline ?? '?'} %; duration ${px.durMin.toFixed(1)} min; HR drift min 8-13 → last 5 ${Number.isFinite(px.driftBpm) ? (px.driftBpm >= 0 ? '+' : '') + px.driftBpm.toFixed(1) + ' bpm' : 'n/a'}; RPE end ${px.rpeEnd ?? 'n/a'}; last-5-min HR ${Number.isFinite(ew.hr) ? Math.round(ew.hr) : 'n/a'}, α1 ${Number.isFinite(ew.alpha1) ? ew.alpha1.toFixed(2) : 'n/a'}; lactate rest ${c.rest ?? 'n/a'}, 10-min ${c.mid ?? 'n/a'}, end ${c.end ?? 'n/a'}${v ? `; verdict: ${v.en}` : ''}`);
+      const basis = ew.how === 'hr' ? ` (end of the run estimated from the heart-rate drop; the ${Math.round(ew.tailSec)} s of recording after it — sampling/recovery — are excluded from the end windows)` : ew.how === 'phase' ? (ew.bouts > 1 ? ` (from the session's phase log; end windows = the last rep)` : ` (the work block from the session's phase log; warm-up and cool-down excluded)`) : '';
+      L.push(`${ew.bouts > 1 ? `Intervals, ${ew.bouts} work bouts` : 'Constant load'} (${session.purpose || 'auto'}): speed ${session.speed ?? '?'} km/h, incline ${session.incline ?? '?'} %; ${ew.bouts > 1 ? `first work start → end of the last rep ${px.durMin.toFixed(1)} min` : `duration ${px.durMin.toFixed(1)} min`}${basis}; HR drift min 8-13 → last 5 ${Number.isFinite(px.driftBpm) ? (px.driftBpm >= 0 ? '+' : '') + px.driftBpm.toFixed(1) + ' bpm' : ew.bouts > 1 ? 'n/a (not defined across intervals)' : 'n/a'}; RPE end ${px.rpeEnd ?? 'n/a'}; last-5-min HR ${Number.isFinite(ew.hr) ? Math.round(ew.hr) : 'n/a'}, α1 ${Number.isFinite(ew.alpha1) ? ew.alpha1.toFixed(2) : 'n/a'}; lactate rest ${c.rest ?? 'n/a'}, 10-min ${c.mid ?? 'n/a'}, end ${c.end ?? 'n/a'}${v ? `; verdict: ${v.en}` : ''}`);
       const ss = smo2Steady(session);
       if (ss) L.push(`SmO2 (constant load): 5-10 min ${Number.isFinite(ss.earlyMean) ? ss.earlyMean.toFixed(1) : 'n/a'} %, last 5 min ${Number.isFinite(ss.endMean) ? ss.endMean.toFixed(1) : 'n/a'} % (drift ${Number.isFinite(ss.drift) ? (ss.drift > 0 ? '+' : '') + ss.drift.toFixed(1) : 'n/a'}), min ${Number.isFinite(ss.min) ? ss.min.toFixed(1) : 'n/a'} %, end slope ${Number.isFinite(ss.slopeEnd) ? ss.slopeEnd.toFixed(2) : 'n/a'} %/min → ${ss.steady == null ? 'n/a' : ss.steady ? 'steady' : 'NOT steady'}; THb mean ${Number.isFinite(ss.thbMean) ? ss.thbMean.toFixed(1) : 'n/a'} (contact ${ss.contact ?? 'n/a'}); coverage ${Math.round(ss.coverageSec / 60)} min; offset ${Math.round((session.smo2.offsetMs || 0) / 1000)} s${session.smo2.alignment ? ` (${session.smo2.alignment.method === 'manual' ? 'manual' : session.smo2.alignment.ok ? `HR-verified, ${session.smo2.alignment.mad.toFixed(2)} bpm` : `UNVERIFIED, HR mismatch ${session.smo2.alignment.mad.toFixed(1)} bpm`})` : ' (clock only)'}`);
     }
     if (session.stages?.length) { L.push('Stages (speed km/h | incline % | HR | α1 | lactate | RPE | SmO2):'); for (const r of (analysis?.rows || session.stages)) L.push(`  ${r.speed} | ${r.incline} | ${Number.isFinite(r.hr) ? Math.round(r.hr) : '-'} | ${Number.isFinite(r.alpha1) ? r.alpha1.toFixed(2) : '-'} | ${r.lactate ?? '-'} | ${r.rpe ?? '-'} | ${Number.isFinite(r.smo2) ? r.smo2.toFixed(1) : '-'}`); }
     if (analysis?.lactate) { L.push('Lactate methods: ' + [...analysis.lactate.lt1, ...analysis.lactate.lt2].map(m => `${m.method}=${Number.isFinite(m.x) ? m.x.toFixed(2) + 'km/h/' + Math.round(m.hr) + 'bpm' : 'n/a'}`).join(', ')); }
-    if (analysis?.hrv) L.push(`HRVT: HRVT1 ${analysis.hrv.hrvt1 ? Math.round(analysis.hrv.hrvt1.hr) + ' bpm @ ' + analysis.hrv.hrvt1.speed.toFixed(1) : 'n/a'}; HRVT2 ${analysis.hrv.hrvt2 ? Math.round(analysis.hrv.hrvt2.hr) + ' bpm @ ' + analysis.hrv.hrvt2.speed.toFixed(1) : 'n/a'}${analysis.hrv.note ? ' (' + analysis.hrv.note + ')' : ''}${analysis.hrv.plateau ? ' [' + analysis.hrv.plateau.note + ']' : ''}`);
+    const kmh = v => Number.isFinite(v) ? v.toFixed(1) : '? km/h';
+    if (analysis?.hrv) L.push(`HRVT: HRVT1 ${analysis.hrv.hrvt1 ? Math.round(analysis.hrv.hrvt1.hr) + ' bpm @ ' + kmh(analysis.hrv.hrvt1.speed) : 'n/a'}; HRVT2 ${analysis.hrv.hrvt2 ? Math.round(analysis.hrv.hrvt2.hr) + ' bpm @ ' + kmh(analysis.hrv.hrvt2.speed) : 'n/a'}${analysis.hrv.note ? ' (' + analysis.hrv.note + ')' : ''}${analysis.hrv.plateau ? ' [' + analysis.hrv.plateau.note + ']' : ''}`);
     if (analysis?.smo2) L.push(`SmO2 breakpoints: BP1 ${analysis.smo2.bp1 ? analysis.smo2.bp1.speed.toFixed(1) + ' km/h' : 'n/a'}, BP2 ${analysis.smo2.bp2 ? analysis.smo2.bp2.speed.toFixed(1) + ' km/h' : 'n/a'}${analysis.smo2.note ? ' (' + analysis.smo2.note + ')' : ''}`);
     if (analysis?.tri) L.push(`Triangulation: LT1 ${analysis.tri.lt1 ? Math.round(analysis.tri.lt1.hr) + ' bpm (' + analysis.tri.lt1.source + ', grade ' + analysis.tri.grade1 + ')' : 'n/a'}; LT2 ${analysis.tri.lt2 ? Math.round(analysis.tri.lt2.hr) + ' bpm (' + analysis.tri.lt2.source + ', grade ' + analysis.tri.grade2 + ')' : 'n/a'}`);
   }
@@ -163,31 +185,49 @@ export function claudeSummary({ profile, zones, session, metrics, analysis, plan
 /** Derive {rest, mid, end} lactate from logged events by timing; explicit session.lactateChecks wins. */
 export function lactateChecks(session) {
   const out = { rest: null, mid: null, end: null, ...(session.lactateChecks || {}) };
-  const t0 = session.startedAt, t1 = session.endedAt || t0; const dur = (t1 - t0) / 1000;
-  for (const e of session.events || []) {
-    if (e.type !== 'lactate' || !Number.isFinite(e.value)) continue;
-    const rel = (e.t - t0) / 1000;
-    if (rel <= 240 && out.rest == null) out.rest = e.value;
-    else if (rel >= dur - 300 || rel >= dur * 0.85) { if (out.end == null) out.end = e.value; }
+  const hl = session.hrLive; const t0 = session.startedAt, t1 = session.endedAt || (hl && hl.length ? hl[hl.length - 1][0] : t0); const dur = (t1 - t0) / 1000; // an unfinished (autosaved) session ends with its last heart beat
+  // When the end of the run is known (heart rate, or the phase log of an LT2 session) a sample belongs to "end" if it was taken from
+  // there on — however long the recording went on (cool-down walk) and however early the run was abandoned. Otherwise: the last 5 min / 15 %.
+  const bout = session.type === 'test' ? null : workBout(session); const endKnown = !!bout && bout.how !== 'end' && bout.t1 != null;
+  const lac = (session.events || []).filter(e => e.type === 'lactate' && Number.isFinite(e.value));
+  // The end sample is drawn after the stop. Only when no sample was logged from the stop on does one from the 90 s before it count
+  // (the estimated stop can be a little late) — otherwise that one was taken during the run (a late "10-min" sample on a run given up early).
+  const endFrom = endKnown ? (lac.some(e => e.t >= bout.t1) ? bout.t1 : bout.t1 - 90000) : null;
+  for (const e of lac) {
+    const rel = (e.t - t0) / 1000; const atEnd = endKnown ? e.t >= endFrom : (rel >= dur - 300 || rel >= dur * 0.85);
+    const preWork = !!bout && bout.how === 'phase' && e.t < bout.t0 + 60000; // LT2 session: taken during the warm-up → a baseline, not the "10-min" sample
+    const early = rel <= 240 || preWork;
+    if (early && out.rest == null) out.rest = e.value;
+    else if (atEnd) { if (out.end == null) out.end = e.value; }
+    else if (early) { /* a second baseline sample (second finger, corrected entry): not the "10-min" sample */ }
     else if (out.mid == null) out.mid = e.value;
   }
   return out;
 }
-/** Mean HR / α1 over the last `sec` seconds of a session (steady-state end). */
+/**
+ * Mean HR / α1 over the last `sec` seconds of the run (steady-state end): the window ends where the running stopped (workBout),
+ * not where the recording did, and never reaches back before the last rep. endT / tailSec / how / bouts say what was used.
+ */
 export function endWindowStats(session, sec = 300) {
-  const t1 = session.endedAt || (session.hrLive?.length ? session.hrLive[session.hrLive.length - 1][0] : null); if (!t1) return { hr: NaN, alpha1: NaN };
-  const hr = (session.hrLive || []).filter(p => p[0] >= t1 - sec * 1000 && p[1] > 0).map(p => p[1]);
-  const a1 = (session.features || []).filter(f => f.t >= t1 - sec * 1000 && Number.isFinite(f.alpha1) && !f.paused).map(f => f.alpha1);
-  return { hr: mean(hr), alpha1: mean(a1) };
+  const b = workBout(session); const t1 = b.t1; if (!t1) return { hr: NaN, alpha1: NaN, endT: null, tailSec: 0, how: 'end', bouts: b.bouts };
+  const iv = pauseIntervals(session); const from = activeWindowStart(iv, t1, sec, b.lastStart ?? -Infinity); // `sec` seconds of running: a pause inside is skipped over, not counted
+  const hr = (session.hrLive || []).filter(p => p[0] >= from && p[0] <= t1 && p[1] > 0 && !inPause(iv, p[0])).map(p => p[1]);
+  const a1 = (session.features || []).filter(f => f.t >= from && f.t <= t1 && Number.isFinite(f.alpha1) && !f.paused).map(f => f.alpha1);
+  return { hr: mean(hr), alpha1: mean(a1), endT: t1, tailSec: b.tailSec, how: b.how, bouts: b.bouts };
 }
-/** Proxies for an end-only MLSS call: duration, HR drift (min 8–13 → last 5 min), SmO2 steadiness, last RPE. */
+/**
+ * Proxies for an end-only MLSS call on ONE continuous run: run time, HR drift (minutes 8–13 of the run → its last 5 min), SmO2
+ * steadiness, last RPE. A belt stop for the 10-min sample inside the early window is left out of its mean (runLevel), so it does
+ * not pass for drift; paused stretches are left out. single = false for interval sessions: there the drift is NaN and the proxy must not be used.
+ */
 export function endOnlyProxy(session) {
-  const t0 = session.startedAt, t1 = session.endedAt || t0; const durMin = (t1 - t0 - (session.pauseMs || 0)) / 60000;
-  const hrs = (session.hrLive || []).filter(p => p[1] > 0);
-  const early = hrs.filter(p => p[0] >= t0 + 480000 && p[0] < t0 + 780000).map(p => p[1]); const late = hrs.filter(p => p[0] >= t1 - 300000).map(p => p[1]);
-  const driftBpm = early.length >= 10 && late.length >= 10 ? mean(late) - mean(early) : NaN;
+  const b = workBout(session); const t0 = b.t0 ?? session.startedAt, t1 = b.t1 || session.endedAt || t0; const iv = pauseIntervals(session); const single = b.bouts === 1;
+  const durMin = (t1 - t0 - pausedMs(iv, t0, t1)) / 60000;
+  const hrs = (session.hrLive || []).filter(p => p[1] > 0 && !inPause(iv, p[0]));
+  const early = hrs.filter(p => p[0] >= t0 + 480000 && p[0] < t0 + 780000).map(p => p[1]); const lateFrom = activeWindowStart(iv, t1, 300, t0); const late = hrs.filter(p => p[0] >= lateFrom && p[0] <= t1).map(p => p[1]);
+  const driftBpm = single && early.length >= 10 && late.length >= 10 ? runLevel(late) - runLevel(early) : NaN;
   const ss = smo2Steady(session); const rpe = (session.events || []).filter(e => e.type === 'rpe' && Number.isFinite(e.value)); const rpeEnd = rpe.length ? rpe[rpe.length - 1].value : null;
-  return { durMin, driftBpm, smo2Steady: ss ? ss.steady : null, rpeEnd };
+  return { durMin, driftBpm, smo2Steady: ss ? ss.steady : null, rpeEnd, single };
 }
 /**
  * Verdict for a constant-load session with end (and optional rest / 10-min) lactate.
@@ -199,11 +239,28 @@ export function lactateVerdict(session) {
   const isMlss = session.purpose === 'mlss' || (session.purpose !== 'lt1' && (type === 'lt2' || (type === 'free' && c.end >= 3)));
   const vd = verdictCore(session, c, isMlss); return vd ? { kind: isMlss ? 'mlss' : 'lt1', ...vd } : null;
 }
+/**
+ * Interval sessions (LT2 mode, more than one rep). The recoveries clear lactate, so the samples tell whether the reps were at the
+ * intended intensity (3–4.5 mmol/L after the last rep, not climbing from rep to rep) — not where MLSS lies. The 10→30-min rise rule
+ * and the heart-rate-drift proxy belong to one continuous run and are not applied; no zone change follows from these verdicts.
+ */
+function intervalVerdict(c, spTxt, delta) {
+  const base = { adjust: null, intervals: true };
+  const noteKo = ' (인터벌은 회복 구간이 있어 MLSS 판정·존 변경에는 쓰지 않습니다 — 검증은 30분 정속으로.)', noteEn = ' (With recoveries between reps this does not locate MLSS and changes no zones — verify with a 30-min constant run.)';
+  const dTxt = delta != null ? `${delta >= 0 ? '+' : ''}${delta.toFixed(1)}` : '';
+  if (delta != null && delta > 1.0) return { ...base, level: 'high', ko: `인터벌 중 젖산 상승 ${dTxt} mmol/L (${c.mid} → ${c.end})${spTxt} — 반복마다 쌓이는 강도입니다. 다음엔 0.3~0.5 km/h 낮추세요.${noteKo}`, en: `Lactate rose ${dTxt} mmol/L across the reps (${c.mid} → ${c.end})${spTxt} — the pace accumulates lactate. Next time 0.3–0.5 km/h slower.${noteEn}` };
+  if (c.end >= 6) return { ...base, level: 'high', ko: `마지막 반복 후 젖산 ${c.end}${spTxt} — LT2 인터벌 목표(3–4.5)보다 높습니다. 다음엔 0.3~0.5 km/h 낮추세요.${noteKo}`, en: `Lactate ${c.end} after the last rep${spTxt} — above the LT2-interval target (3–4.5). Next time 0.3–0.5 km/h slower.${noteEn}` };
+  if (c.end < 3) return { ...base, level: 'low', ko: `마지막 반복 후 젖산 ${c.end}${spTxt} — LT2 인터벌 목표(3–4.5) 아래. 여유가 있었다면 다음엔 +0.3 km/h.${noteKo}`, en: `Lactate ${c.end} after the last rep${spTxt} — below the LT2-interval target (3–4.5). If it felt controlled, +0.3 km/h next time.${noteEn}` };
+  if (c.end <= 4.5) return { ...base, level: 'ok', ko: `마지막 반복 후 젖산 ${c.end}${spTxt}${delta != null ? `, 반복 간 변화 ${dTxt}` : ''} — LT2 인터벌 목표 범위(3–4.5).${noteKo}`, en: `Lactate ${c.end} after the last rep${spTxt}${delta != null ? `, change across reps ${dTxt}` : ''} — on target for LT2 intervals (3–4.5).${noteEn}` };
+  return { ...base, level: 'near', ko: `마지막 반복 후 젖산 ${c.end}${spTxt} — LT2 인터벌 목표(3–4.5)보다 조금 높음. 속도를 유지하거나 0.2~0.3 km/h 낮추세요.${noteKo}`, en: `Lactate ${c.end} after the last rep${spTxt} — a little above the LT2-interval target (3–4.5). Hold the speed or go 0.2–0.3 km/h slower.${noteEn}` };
+}
 function verdictCore(session, c, isMlss) {
   const sp = session.speed;
   const spTxt = Number.isFinite(sp) ? ` @ ${sp} km/h` : '';
   const rise = c.rest != null ? c.end - c.rest : null; const delta = c.mid != null ? c.end - c.mid : null;
   if (isMlss) {
+    const px = endOnlyProxy(session);
+    if (!px.single) return intervalVerdict(c, spTxt, delta);
     if (delta != null) {
       if (delta <= 1.0 && c.end < 8) return { level: 'ok', adjust: { lt2Speed: +0.3 }, ko: `MLSS 이하 확인${spTxt}: 10분→종료 상승 ${delta.toFixed(1)} mmol/L (≤1.0). 다음 검증은 +0.3 km/h.`, en: `At/below MLSS${spTxt}: 10-min→end rise ${delta.toFixed(1)} mmol/L (≤1.0). Next verification +0.3 km/h.` };
       return { level: 'high', adjust: { lt2Speed: -0.4 }, ko: `MLSS 초과${spTxt}: 10분→종료 상승 ${delta.toFixed(1)} mmol/L (>1.0). LT2 속도를 0.3~0.5 km/h 낮추세요.`, en: `Above MLSS${spTxt}: rise ${delta.toFixed(1)} mmol/L (>1.0). Lower the LT2 speed by 0.3–0.5 km/h.` };
@@ -211,7 +268,6 @@ function verdictCore(session, c, isMlss) {
     if (c.end >= 6) return { level: 'high', adjust: { lt2Speed: -0.4 }, ko: `종료 젖산 ${c.end} — LT2 위일 가능성${spTxt}. 10분 샘플을 추가하면 판정이 확실해집니다.`, en: `End lactate ${c.end} — likely above LT2${spTxt}. Add a 10-min sample next time for a firm call.` };
     if (c.end < 3) return { level: 'low', adjust: { lt2Speed: +0.3 }, ko: `종료 젖산 ${c.end} — LT2 아래${spTxt}. 다음엔 +0.3 km/h.`, en: `End lactate ${c.end} — below LT2${spTxt}. Try +0.3 km/h next time.` };
     // End-only MLSS proxy (solo use, no 10-min sample): must complete ≥ 25 min; HR drift (min 8–13 → last 5 min) ≤ 6 bpm and SmO2 steady → likely at/below MLSS; drift > 8 bpm, SmO2 still falling or RPE ≥ 18 → likely above.
-    const px = endOnlyProxy(session);
     if (px.durMin < 25) return { level: 'near', adjust: null, ko: `종료 젖산 ${c.end} — ${Math.round(px.durMin)}분만 달려 MLSS 판정 보류${spTxt}. 30분을 채우거나(힘들어 중단했다면 MLSS 위) 10분 샘플을 추가하세요.`, en: `End lactate ${c.end} — only ${Math.round(px.durMin)} min, MLSS call withheld${spTxt}. Complete 30 min (if you stopped from fatigue, treat as above MLSS) or add a 10-min sample.` };
     const dTxt = Number.isFinite(px.driftBpm) ? `${px.driftBpm >= 0 ? '+' : ''}${px.driftBpm.toFixed(0)} bpm` : 'n/a';
     const bad = []; if (Number.isFinite(px.driftBpm) && px.driftBpm > 8) bad.push(`심박 드리프트 ${dTxt}|HR drift ${dTxt}`); if (px.smo2Steady === false) bad.push('SmO₂ 계속 하락|SmO2 still falling'); if (px.rpeEnd != null && px.rpeEnd >= 18) bad.push(`RPE ${px.rpeEnd}|RPE ${px.rpeEnd}`);
@@ -231,7 +287,7 @@ function verdictCore(session, c, isMlss) {
  * Confirmed runs raise a floor (LT ≥ this speed/HR); failed runs lower a cap (LT < this speed/HR). Returns null when nothing changes.
  */
 export function verdictZoneChange(zones, session, vd = lactateVerdict(session)) {
-  if (!vd) return null; const z = zones || {}; const ew = endWindowStats(session, 300); const sp = session.speed;
+  if (!vd || vd.intervals) return null; const z = zones || {}; const ew = endWindowStats(session, 300); const sp = session.speed;
   const hr = Number.isFinite(ew.hr) ? Math.round(ew.hr) : NaN; const out = { ...z }; const r1 = v => Math.round(v * 10) / 10;
   const up = (k, v) => { if (Number.isFinite(v) && !(z[k] >= v)) out[k] = v; }; const down = (k, v) => { if (Number.isFinite(v) && !(z[k] <= v)) out[k] = v; };
   if (vd.kind === 'mlss') {
@@ -248,15 +304,16 @@ export function verdictZoneChange(zones, session, vd = lactateVerdict(session)) 
   const txt = keys.map(fmt).join(', ');
   return { zones: out, keys, ko: txt, en: txt };
 }
-/** Multi-day lactate curve: constant-speed sessions (last `days`) with an end sample → lactate vs speed (+ end-HR). */
+/** Multi-day lactate curve: constant-speed sessions (last `days`; demo and interval sessions excluded) with an end sample → lactate vs speed (+ end-HR). */
 export function multiDayCurve(sessions, { days = 60, incline = null } = {}) {
   const now = Date.now(); const pts = [];
   for (const s of sessions) {
-    if (s.type === 'test' || !s.final || !Number.isFinite(s.speed)) continue;
+    if (s.type === 'test' || !s.final || !Number.isFinite(s.speed) || s.sourceKind === 'demo') continue; // demo (virtual strap) sessions are practice, not data
     if (now - s.startedAt > days * 86400000) continue;
     if (incline != null && Number.isFinite(s.incline) && Math.abs(s.incline - incline) > 0.6) continue;
     const c = lactateChecks(s); if (c.end == null) continue;
     const w = endWindowStats(s, 300);
+    if (w.bouts > 1) continue; // interval sessions: lactate after reps with recoveries is not a point of the constant-speed curve
     pts.push({ x: s.speed, la: c.end, hr: w.hr, alpha1: w.alpha1, id: s.id, date: s.startedAt, incline: s.incline });
   }
   // one point per speed: keep the most recent

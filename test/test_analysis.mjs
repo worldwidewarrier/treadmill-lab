@@ -1,5 +1,5 @@
 // node test/test_analysis.mjs — synthetic step test through summarizeStages → HRVT / SmO2 / triangulation
-import { analyzeSession, hrvThresholds, smo2Breakpoints, agreement } from '../js/analysis.js';
+import { analyzeSession, hrvThresholds, smo2Breakpoints, agreement, triangulate } from '../js/analysis.js';
 let failures = 0;
 const check = (n, c, d = '') => { console.log((c ? 'PASS ' : 'FAIL ') + n + (d ? '  ' + d : '')); if (!c) failures++; };
 
@@ -46,5 +46,11 @@ check('no lactate → anchor = hrv, grade C', r2.tri.lt1 && r2.tri.lt1.source ==
 const s3 = JSON.parse(JSON.stringify(session)); s3.features.forEach(f => f.alpha1 = Math.max(f.alpha1, 0.9));
 const r3 = hrvThresholds(analyzeSession(s3).rows);
 check('a1 never crossing → hrvt1 null with note', r3.hrvt1 === null && /never/.test(r3.note), r3.note);
+// stages that came from imported laps have no speed: thresholds keep their heart rate, the speed is unknown — never 0 km/h
+{ const rows = [1.2, 1.0, 0.85, 0.68, 0.52, 0.4].map((a, i) => ({ idx: i + 1, speed: null, incline: 1, hr: 120 + 10 * i, alpha1: a, artifactPct: 1 }));
+  const h = hrvThresholds(rows); check('no stage speeds → HRVT1 has a heart rate and an unknown speed', h.hrvt1 && Number.isFinite(h.hrvt1.hr) && Number.isNaN(h.hrvt1.speed), JSON.stringify(h.hrvt1));
+  const noisy = [1.2, 1.25, 0.7, 1.1, 0.45, 1.0].map((a, i) => ({ idx: i + 1, speed: null, incline: 1, hr: 120 + 10 * i, alpha1: a, artifactPct: 1 }));
+  const h2 = hrvThresholds(noisy); check('…also on the first-crossing path (weak fit)', h2.hrvt1 && h2.hrvt1.how === 'interp' && Number.isNaN(h2.hrvt1.speed), JSON.stringify(h2.hrvt1));
+  const tri = triangulate({ lactate: null, hrv: h, smo2: null, stageCount: 6 }); check('…and the triangulated threshold carries no made-up speed', tri.lt1 && Number.isNaN(tri.lt1.speed), JSON.stringify(tri.lt1 && { hr: tri.lt1.hr, speed: tri.lt1.speed })); }
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL PASS');
 process.exit(failures ? 1 : 0);

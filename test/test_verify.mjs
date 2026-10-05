@@ -5,7 +5,8 @@ let failures = 0; const check = (n, c, d = '') => { console.log((c ? 'PASS ' : '
 const now = Date.now();
 const mk = (type, speed, { rest = null, mid = null, end = null, hr = 140, daysAgo = 1, dur = 1800 } = {}) => {
   const t0 = now - daysAgo * 86400000; const hrLive = []; for (let i = 0; i < dur; i++) hrLive.push([t0 + i * 1000, hr]);
-  const events = []; if (rest != null) events.push({ t: t0 + 30000, type: 'lactate', value: rest }); if (mid != null) events.push({ t: t0 + 600000, type: 'lactate', value: mid }); if (end != null) events.push({ t: t0 + dur * 1000 - 60000, type: 'lactate', value: end });
+  const events = type === 'lt2' ? [{ t: t0, type: 'phase', phase: 'work', rep: 1 }] : []; // an LT2 session always carries its phase log; here: one rep from start to end (the MLSS-check set-up)
+  if (rest != null) events.push({ t: t0 + 30000, type: 'lactate', value: rest }); if (mid != null) events.push({ t: t0 + 600000, type: 'lactate', value: mid }); if (end != null) events.push({ t: t0 + dur * 1000 - 60000, type: 'lactate', value: end });
   return { id: type + speed + daysAgo, type, final: true, startedAt: t0, endedAt: t0 + dur * 1000, speed, incline: 1, hrLive, features: [], events };
 };
 // checks from events by timing
@@ -21,6 +22,12 @@ check('LT2 Δ 0.6 → ok (+0.3)', (() => { const v = lactateVerdict(mk('lt2', 12
 check('LT2 Δ 1.8 → high (−0.4)', (() => { const v = lactateVerdict(mk('lt2', 12.5, { mid: 3.8, end: 5.6 })); return v.level === 'high' && v.adjust.lt2Speed === -0.4; })());
 check('LT2 end-only 6.5 → high', lactateVerdict(mk('lt2', 13, { end: 6.5 })).level === 'high');
 check('no end sample → null', lactateVerdict(mk('lt1', 9, { rest: 1.0 })) === null);
+{ // an LT2 record without a phase log (hand-made): warm-up, reps and rests cannot be told apart → judged as intervals, zones untouched
+  const { verdictZoneChange } = await import('../js/prescribe.js'); const bare = { ...mk('lt2', 12, { mid: 3.4, end: 4.0 }), events: mk('lt2', 12, { mid: 3.4, end: 4.0 }).events.filter(e => e.type !== 'phase') };
+  const v = lactateVerdict(bare); check('LT2 record without phase log → interval verdict, no zone change', v.intervals === true && v.adjust === null && verdictZoneChange({ lt2Hr: 150, lt2Speed: 10 }, bare) === null, v.en.slice(0, 60));
+  const twoRest = mk('lt1', 9, { rest: 1.1, end: 1.8 }); twoRest.events.splice(1, 0, { t: twoRest.startedAt + 90000, type: 'lactate', value: 0.9 });
+  check('a second sample in the first minutes is not taken for the 10-min sample', lactateChecks(twoRest).mid == null && lactateChecks(twoRest).rest === 1.1 && lactateChecks(twoRest).end === 1.8, JSON.stringify(lactateChecks(twoRest)));
+}
 // multi-day curve
 const sessions = [mk('lt1', 8, { end: 1.1, hr: 128, daysAgo: 9 }), mk('lt1', 9, { end: 1.3, hr: 137, daysAgo: 7 }), mk('lt1', 10, { end: 1.8, hr: 146, daysAgo: 5 }), mk('lt2', 11, { end: 2.7, hr: 154, daysAgo: 3 }), mk('lt2', 12, { end: 4.2, hr: 162, daysAgo: 1 }), mk('lt2', 12, { end: 4.6, hr: 163, daysAgo: 10 }), mk('test', 7, { end: 1 })];
 const md = multiDayCurve(sessions);

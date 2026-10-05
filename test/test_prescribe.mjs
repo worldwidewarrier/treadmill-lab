@@ -19,6 +19,8 @@ const m = sessionMetrics(fakeSession(0.65, 10, 1)); check('metrics drift ≈ +4.
 const ins = assessRecent([fakeSession(0.65, 2, 1), fakeSession(0.66, 1, 3)], zones, now - 70 * 86400000);
 check('low α1 → −3 bpm adjust', ins.lt1Adjust === -3, JSON.stringify(ins.notes.map(n => n.en)));
 check('retest flagged at 10 weeks', ins.retest === true);
+const insDemo = assessRecent([{ ...fakeSession(0.65, 2, 1), sourceKind: 'demo' }, { ...fakeSession(0.66, 1, 3), sourceKind: 'demo' }], zones, now - 7 * 86400000);
+check('practice sessions on the demo strap never adjust the real targets', insDemo.lt1Adjust === 0 && insDemo.sessionsConsidered === 0, JSON.stringify(insDemo.notes.map(n => n.en)));
 const txt = sessionSummaryText(fakeSession(0.65, 2, 1), m, zones); check('summary text bilingual', /LT1보다 높은/.test(txt.ko) && /Harder than LT1/.test(txt.en));
 const cs = claudeSummary({ profile: { age: 29, restHr: 52, maxHr: 188 }, zones: { ...zones, grade: 'B' }, session: fakeSession(0.8, 1, 0), metrics: m, plan: p1 });
 check('claude summary has sections', /Thresholds/.test(cs) && /Plan week 1/.test(cs));

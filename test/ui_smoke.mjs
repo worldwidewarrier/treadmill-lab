@@ -1,12 +1,14 @@
 // Headless UI smoke test at Galaxy A35 CSS viewport (384×604 @2.8): console errors, navigation, demo step test ×60, import of real files.
 import { chromium } from '/opt/npm-tools/node_modules/playwright/index.mjs';
-import { readFileSync } from 'node:fs';
+import { mkdirSync } from 'node:fs'; import { tmpdir } from 'node:os';
+const SHOTS = process.env.TL_SHOTS || `${tmpdir()}/treadmill-lab-shots`; mkdirSync(SHOTS, { recursive: true }); // screenshots
+import { readFileSync, existsSync } from 'node:fs';
 const base = 'http://127.0.0.1:8765/';
 const browser = await chromium.launch();
 const ctx = await browser.newContext({ viewport: { width: 384, height: 604 }, deviceScaleFactor: 2.8125, isMobile: true, hasTouch: true, colorScheme: 'dark', locale: 'ko-KR', timezoneId: 'Asia/Seoul' });
 const page = await ctx.newPage();
 const errors = []; page.on('pageerror', e => errors.push('pageerror: ' + e.message)); page.on('console', m => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
-const shot = (n) => page.screenshot({ path: `/tmp/claude-0/-home-claude/b7afc582-3385-59f9-b17f-772b43d6baaf/scratchpad/shots/${n}.png`, fullPage: true });
+const shot = (n) => page.screenshot({ path: `${SHOTS}/${n}.png`, fullPage: true });
 await page.goto(base, { waitUntil: 'networkidle' });
 await page.waitForSelector('#view .card');
 const overflow = async () => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
@@ -55,25 +57,29 @@ await page.click('#nav button[data-view=plan]'); await page.waitForSelector('.pl
 // import real files
 await page.click('#nav button[data-view=analysis]'); await page.waitForSelector('[data-action=import]');
 const fi = await page.$('#file-input');
-await fi.setInputFiles(['test/data/fatmaxxer_rr_121156.csv', 'test/data/trainred_session.csv', 'test/data/trainred_sensor0.fit', 'test/data/fatmaxxer_features_0926.csv', 'test/data/synthetic_garmin.fit']);
+const wanted = ['test/data/fatmaxxer_rr_121156.csv', 'test/data/trainred_session.csv', 'test/data/trainred_sensor0.fit', 'test/data/fatmaxxer_features_0926.csv', 'test/data/synthetic_garmin.fit'];
+const present = wanted.filter(p => existsSync(p)); if (present.length < wanted.length) console.log('SKIP private fixtures not present:', wanted.filter(p => !present.includes(p)).join(', '));
+await fi.setInputFiles(present);
 await page.waitForTimeout(2500);
 const counts = await page.evaluate(() => ({ sessions: TL.sessions.length, imports: TL.imports.length, types: TL.sessions.map(s => s.type + ':' + (s.sourceKind || '')) }));
 console.log('after import:', JSON.stringify(counts));
 await shot('09-analysis-list');
 // open the FatMaxxer-derived session
 const id = await page.evaluate(() => TL.sessions.find(s => (s.sourceKind || '').includes('fatmaxxer'))?.id);
-await page.evaluate((id) => { document.querySelector(`[data-action=open-session][data-id="${id}"]`).click(); }, id);
-await page.waitForSelector('#tl-chart .uplot', { timeout: 8000 }); await shot('10-fatmaxxer-session');
-const m = await page.evaluate(() => TL.detail.metrics);
-console.log('fatmaxxer session metrics:', JSON.stringify(m));
+if (id) {
+  await page.evaluate((id) => { document.querySelector(`[data-action=open-session][data-id="${id}"]`).click(); }, id);
+  await page.waitForSelector('#tl-chart .uplot', { timeout: 8000 }); await shot('10-fatmaxxer-session');
+  const m = await page.evaluate(() => TL.detail.metrics);
+  console.log('fatmaxxer session metrics:', JSON.stringify(m));
+  await page.evaluate(() => document.querySelector('[data-action=back]').click()); await page.waitForTimeout(300);
+}
 // open the synthetic garmin session (laps → stages)
 const gid = await page.evaluate(() => TL.sessions.find(s => (s.filename || '').includes('synthetic'))?.id);
-await page.evaluate(() => document.querySelector('[data-action=back]').click()); await page.waitForTimeout(300);
 await page.evaluate((id) => { document.querySelector(`[data-action=open-session][data-id="${id}"]`).click(); }, gid);
 await page.waitForSelector('#stage-table', { timeout: 8000 }); await shot('11-garmin-session');
 // light theme check
 await ctx.close();
-const ctx2 = await browser.newContext({ viewport: { width: 384, height: 604 }, deviceScaleFactor: 2, colorScheme: 'light' }); const p2 = await ctx2.newPage(); p2.on('pageerror', e => errors.push('light pageerror: ' + e.message));
-await p2.goto(base, { waitUntil: 'networkidle' }); await p2.waitForSelector('#view .card'); await p2.screenshot({ path: '/tmp/claude-0/-home-claude/b7afc582-3385-59f9-b17f-772b43d6baaf/scratchpad/shots/12-home-light.png', fullPage: true });
+const ctx2 = await browser.newContext({ viewport: { width: 384, height: 604 }, deviceScaleFactor: 2, colorScheme: 'light', locale: 'ko-KR' }); const p2 = await ctx2.newPage(); p2.on('pageerror', e => errors.push('light pageerror: ' + e.message));
+await p2.goto(base, { waitUntil: 'networkidle' }); await p2.waitForSelector('#view .card'); await p2.screenshot({ path: `${SHOTS}/12-home-light.png`, fullPage: true });
 await browser.close();
 console.log('errors:', errors.length ? errors : 'none');

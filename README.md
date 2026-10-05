@@ -60,10 +60,16 @@ H10은 블루투스 2개 + ANT+를 동시에 지원하므로 이 앱(RR) + Train
 - **젖산**: LT1 = 기저치 +0.5 mmol/L (보조: log-log, OBLA 2.0); LT2 = Log-Poly-ModDmax (보조: Dmax, OBLA 4.0). 3차 다항 곡선, 심박은 단계 간 선형 보간.
 - **HRVT**: 단계 마지막 60초 α1(윈도우가 단계 안에 완전히 들어오도록) vs 심박 회귀 → 0.75 / 0.5.
 - **SmO2**: 단계 마지막 60초 평균 vs 속도의 2-분절 선형 회귀 → BP1/BP2, 2분 기울기 < −0.5 %/min = 비정상 상태.
-- **SmO2 (일정 부하 세션)**: 5–10분 평균 vs 마지막 5분 평균(드리프트), 마지막 10분 기울기 > −0.3 %/min = 안정 상태, THb 평균 < 12 = 접촉 불량 의심. 젖산 검증 카드·요약·CSV에 표시.
+- **SmO2 (일정 부하 세션)**: 5–10분 평균 vs 마지막 5분 평균(드리프트), 마지막 10분 기울기 > −0.3 %/min = 안정 상태, THb 평균 < 12 = 접촉 불량 의심. 젖산 검증 카드·요약·CSV에 표시. '마지막'은 기록의 끝이 아니라 **운동 종료 시점** 기준(아래).
 - **삼각측량**: 젖산 = 기준. 차이 ≤5 bpm 일치 / 5–10 주의 / >10 불일치. 등급 A(젖산 + 6단계↑ + 일치 1↑, 불일치 0) / B / C.
 - **SmO2 시간 정렬**: Train.Red/가민 파일에 심박이 있으면 세션의 H10 심박과 교차상관(±180 s, 1 s 간격)으로 시계 오차를 추정해 자동 보정하고(평균 오차 < 2.5 bpm일 때), 세션 상세·요약에 '심박 교차검증 ✓'로 표시합니다. 심박이 없는 파일은 시작 시각 기준 정렬 + 수동 보정.
-- **심박 드리프트**: 마지막 1/3 vs 첫 1/3 (15분 이상 세션은 처음 5분 램프업 제외).
+- **심박 드리프트**: 마지막 1/3 vs 첫 1/3 (15분 이상 세션은 처음 5분 램프업 제외, 운동 종료 이후 구간 제외).
+- **운동 종료 추정 (일정 부하 세션)**: 벨트를 멈추고 채혈·입력하는 동안에도 기록은 1–3분(쿨다운 걷기를 켜 두면 더 길게) 이어집니다. 그 회복 구간이 '마지막 5분'에 섞이면 심박은 낮게, SmO2는 반등해 높게 잡혀 MLSS 판정이 '이하' 쪽으로 기웁니다(합성 예: 회복 100초가 섞이면 드리프트 +8 bpm이 −0.5로, 떨어지던 SmO2 끝 기울기 −0.5가 +1.2 %/min으로 측정됨). `exerciseEnd`는 심박(15초 이동 중앙값)만으로 달리기가 끝난 시점을 찾습니다. 후보 시점 τ 직전 5분의 달리기 수준 L(중간 정지 같은 일시적 하락을 뺀 값들의 하위 10 %)에 대해 ① τ+30초부터 기록 끝까지 심박이 L−5 안으로 돌아오지 않고 ② 꼬리가 2분보다 길면 τ+90초부터 L−15 아래에 머물며 ③ 마지막 20초가 L보다 12 bpm(꼬리 2분 이하)~25 bpm(4분 이상) 낮고 ④ τ+90초 이후 심박이 그때까지 대부분을 달린 수준의 8 bpm 안으로 돌아오지 않을 때(몇 분 빨리 달린 뒤 다시 평소 속도로 달린 것은 종료가 아님) — 이런 τ 중 **가장 이른 것**이 운동 종료입니다(정지 → 서 있기 → 걷기 → 서 있기는 꼬리 하나). 합성 기록 4,000개(`node test/calib_exercise_end.mjs`: 런 유형 × 꼬리 유형 × 잡음 × 표본 간격 무작위)에서 꼬리 없는 544개의 오검출 0건, 꼬리 있는 3,456개 중 92 %에서 종료를 찾았고(못 찾으면 예전처럼 기록 끝을 씀) 찾은 경우 오차 중앙값 −11초, 5–95 % 구간 −17…−2초, 98.6 %가 실제 정지 ±20초 이내. 마지막 5분 심박·α1, 10→30분 드리프트, 런 시간(≥25분 규칙), SmO2 끝 기울기, 종료 젖산 분류가 모두 이 시점 기준이며 검증 카드·요약·CSV에 추정 시각과 제외한 길이가 표시됩니다. 달리는 중에 종료를 누르면 아무것도 바뀌지 않습니다. **한계**(심박만으로는 구분할 수 없음): 달리기 심박보다 15 bpm 미만 낮은 걷기는 달리기로, 25 bpm 이상 낮은 쿨다운 조깅은 종료 이후로 봅니다. 앞부분보다 긴 고강도 구간은 그 구간을 '런'으로 봅니다(워밍업 → 본 구간 → 쿨다운 조깅). 기록 첫 부분이 가장 빠르거나 꼬리가 달린 시간의 1.5배를 넘으면 판단하지 않고 기록 끝을 씁니다. 검증 런은 프로토콜대로(워밍업은 세션 밖, 한 속도로 시작부터 정지까지) 기록하세요. 실제 기록으로는 아직 검증하지 못했습니다(개인 데이터가 저장소에 없음) — 카드에 표시되는 추정 시각이 실제와 20초 넘게 다르면 알려 주세요.
+- **LT2 세션(인터벌)**: 세션이 남긴 work 구간 기록이 기준입니다 — '마지막 5분'은 마지막 반복의 끝 5분, 종료 샘플은 마지막 반복이 끝난 뒤의 첫 샘플, 워밍업 중 샘플은 안정 시 값. 반복이 2회 이상이면 드리프트와 MLSS 규칙을 쓰지 않고(회복 구간이 젖산을 낮춤) 마지막 반복 후 젖산으로 강도만 평가합니다: 3–4.5 목표 범위, < 3 낮음, 4.5–6 조금 높음, ≥ 6 또는 반복 간 상승 > 1.0 → 속도를 낮춤. 존은 바꾸지 않고 다일 곡선에도 넣지 않습니다. 1회 30분 반복(MLSS 검증)은 그 반복 안에서 일정 부하 런과 똑같이 판정합니다.
+- **젖산 샘플 분류**: 안정 시 = 시작 4분 이내(LT2 세션은 첫 반복 전)의 첫 샘플 · 종료 = 운동 종료 이후의 첫 샘플(종료 시점을 모르면 마지막 5분/15 %) · 10분 = 그 사이의 첫 샘플. 같은 칸의 두 번째 샘플(두 손가락)은 쓰지 않습니다 — 값은 검증 카드에서 직접 고칠 수 있습니다.
+- **10→30분 드리프트(종료 단독 MLSS 대리 판정)**: 런의 8–13분 평균과 마지막 5분 평균의 차이. 창 안에 벨트 정지(창의 3 % 이상이 70번째 백분위보다 15 bpm 넘게 낮음)가 있으면 그 창은 백분위 −8 bpm 이상의 값만 평균해, 10분 채혈로 멈춘 구간이 드리프트로 잡히지 않습니다. 정지가 없는 런의 값은 이전 버전과 같습니다.
+- **일시정지**: 단계·인터벌·경과 시계가 멈추고, 재개하면 남은 시간이 그대로 이어집니다. 기록은 계속되지만 일시정지 구간의 심박·α1·SmO2는 단계 표, 마지막 5분, 드리프트에서 빠지고 '마지막 5분'은 달린 시간 5분을 채웁니다. 일시정지 중에 「단계 종료」나 「종료」를 누르면 그 단계는 일시정지를 누른 시점에 끝난 것으로 기록됩니다.
+- **스트랩 무신호**: 5초 넘게 심박 알림이 없으면(범위 이탈·재연결 중) 그 구간의 행은 시간축만 남기고 심박·α1을 비웁니다(마지막 값을 되풀이해 적지 않음). 존 체류 시간도 세지 않습니다.
 - **처방**: 3존·5존, LT1 세션 = LT1 −10~−3 bpm(α1 ≥0.75 유지), LT2 세션 = LT2 ±3, 주 1회 LT2(4×8 → 4×10 → 5×10 → 회복 → 3×15 → 2×20 → 템포 30 → 회복), 긴 LT1 매주 +10분, 자동 조정(α1 <0.70 → −3 bpm 등), 8주 또는 드리프트 시 재검사.
 
 ## 5. 개발 · Development
@@ -75,11 +81,24 @@ node test/test_lactate.mjs         # lactate methods vs numpy reference
 node test/test_analysis.mjs        # HRVT / SmO2 / triangulation on a synthetic step test
 node test/test_prescribe.mjs       # zones, weekly plan, insights
 node test/test_session.mjs         # full synthetic step test through the engine (×120)
-TZ=Asia/Seoul node test/test_importers.mjs   # Train.Red CSV/FIT, FatMaxxer, Garmin FIT (python3 test/make_fit.py first)
+node test/test_engine.mjs          # engine on a hand-driven clock: pause (clocks, stage rows, stage end), numeric settings, silent strap, nothing carried into the next session
+node test/test_ble.mjs             # Bluetooth source against a mock strap: flaky reconnects, failed / cancelled first connection, two sources on one device (≈35 s)
+node test/test_alerts.mjs          # screen wake lock: one lock, the last of several quick on/off requests wins
+node test/test_exercise_end.mjs    # end-of-run estimate (many kinds of tail, surges, eased pace, false readings), LT2 sessions recorded by the engine, lactate sample filing (≈10 s)
+node test/test_verify.mjs          # lactate verification verdicts, zone updates, multi-day curve
+node test/calib_exercise_end.mjs   # not a test: hit rate and timing error of the end-of-run estimate on 4,000 random recordings
+TZ=Asia/Seoul node test/test_importers.mjs   # Garmin FIT + RR text always; Train.Red / FatMaxxer parts when the private files are present
 node test/test_version.mjs         # APP_VERSION (app.js) == sw.js VERSION
 TZ=Asia/Seoul node test/test_align.mjs       # SmO2 clock-offset estimator (synthetic lags + real Train.Red file if present)
-node test/ui_smoke.mjs             # headless Chromium at 384×604 (needs playwright)
+node test/ui_smoke.mjs             # headless Chromium at 384×604 (needs playwright + the dev server on :8765)
+node test/ui_flows.mjs             # LT1 / LT2 demo sessions, backup, language
+node test/ui_verify.mjs            # verification card, multi-day curve, continuous test
+node test/ui_strap.mjs             # the Bluetooth path through the UI with a mock strap (pause, cue on another tab, reconnect, settings) + verification cards for a run with a tail and for intervals
+node test/ui_data.mjs              # generated RR + Train.Red-style files: replay, SmO2 auto-attach + clock alignment, backup → delete all → restore (also during a session), stage edits
+node test/ui_sw.mjs                # service worker: install, offline start, update served like GitHub Pages, host error / slow host → cached app (own server)
 ```
+
+Tests that need the owner's private exports skip those parts when the files are absent (`test/data/README.md`). Screenshots go to `$TL_SHOTS` (default: a temp folder).
 
 Files: `js/dfa.js` (α1 engine), `js/lactate.js`, `js/analysis.js`, `js/prescribe.js`, `js/session.js` (test/LT1/LT2 engine), `js/ble.js`, `js/sources.js` (demo/replay), `js/importers.js` + `js/fit.js`, `js/store.js` (IndexedDB), `js/app.js` (UI), `sw.js` (offline).
 
