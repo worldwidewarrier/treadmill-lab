@@ -67,6 +67,12 @@ await change('#vc-runend', '36:40'); c = await card();
 check('  typing the end of the recording ("ran to the end"): taken as it is', !c.confirm && (await page.evaluate(() => TL.detail.runEndSec)) === 2200 && /직접 입력한 시각/.test(c.how));
 await change('#vc-runend', '30'); c = await card();
 check('  "30" means 30 min', (await page.evaluate(() => TL.detail.runEndSec)) === 1800 && c.runend === '30:00');
+// (a phone's number pad has no colon: digits alone and other separators must do)
+await change('#vc-runend', '2930'); c = await card(); const d1 = await page.evaluate(() => TL.detail.runEndSec);
+await change('#vc-runend', '29.40'); c = await card(); const d2 = await page.evaluate(() => TL.detail.runEndSec);
+await change('#vc-runend', '2975'); const c3 = await card(); const d3 = await page.evaluate(() => TL.detail.runEndSec);
+check('  "2930" = 29:30, "29.40" = 29:40; "2975" (75 s) is refused', d1 === 1770 && d2 === 1780 && c.runend === '29:40' && d3 === 1780 && c3.runend === '29:40', `${d1} ${d2} ${d3} ${c3.runend}`);
+check('  the field asks for a number pad', (await page.getAttribute('#vc-runend', 'inputmode')) === 'numeric');
 // 4) fields
 await open('card-mlss'); await change('#vc-mid', ''); c = await card();
 check('emptying the 10-min field keeps it empty (and the verdict follows)', c.mid === '' && c.end === '4.1' && !c.notices.some(n => /10분→종료 상승/.test(n)), c.notices.map(n => n.slice(0, 30)).join(' | '));

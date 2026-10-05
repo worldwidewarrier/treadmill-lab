@@ -35,8 +35,19 @@ const $ = sel => document.querySelector(sel);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const fmtClock = sec => { sec = Math.max(0, Math.round(sec)); const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60; return h ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}` : `${m}:${String(s).padStart(2, '0')}`; };
 const fmtDate = ms => { const d = new Date(ms); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
-/** "35:05" → 2105 · "1:02:03" → 3723 · "35" or "35.5" (minutes) → 2100 / 2130 · anything else → NaN */
-const parseClock = txt => { const p = String(txt).trim().split(':'); if (!p.length || p.length > 3 || p.some(x => !/^\d+(\.\d+)?$/.test(x.trim()))) return NaN; const v = p.map(Number); return Math.round(p.length === 1 ? v[0] * 60 : p.length === 2 ? v[0] * 60 + v[1] : v[0] * 3600 + v[1] * 60 + v[2]); };
+/**
+ * A time as typed into the run-end field → seconds. "35:05" → 2105 · "1:02:03" → 3723 · the separator may also be . , - or a space
+ * (a phone's number pad has no colon) · digits alone are read like the display without its colons: "3505" → 35:05, "10203" → 1:02:03,
+ * one or two digits are minutes ("35" → 35:00) · anything else, and seconds or minutes of 60 and more → NaN
+ */
+const parseClock = txt => {
+  const str = String(txt).trim(); let p;
+  if (/^\d+$/.test(str)) p = str.length <= 2 ? [str, '0'] : str.length <= 4 ? [str.slice(0, -2), str.slice(-2)] : str.length <= 6 ? [str.slice(0, -4), str.slice(-4, -2), str.slice(-2)] : null;
+  else p = str.split(/\s*[:.,\-\s]\s*/);
+  if (!p || p.length < 2 || p.length > 3 || p.some(x => !/^\d+$/.test(x))) return NaN;
+  const v = p.map(Number); if (v[v.length - 1] >= 60 || (v.length === 3 && v[1] >= 60)) return NaN;
+  return v.length === 2 ? v[0] * 60 + v[1] : v[0] * 3600 + v[1] * 60 + v[2];
+};
 /** How the end of the run was found (analysis.js runTimeline) — card wording [ko, en]. */
 const RUN_HOW = {
   sample: ['채혈 값을 입력하기 전, 심박이 떨어지기 시작한 시점', 'where the heart rate began to fall before the lactate entry'],
@@ -378,7 +389,7 @@ async function renderSessionDetail(id) {
       <div class="grid2"><label class="field">러닝머신 km/h<input type="number" step="0.1" id="vc-speed" value="${s.speed ?? ''}"></label><label class="field">경사 %<input type="number" step="0.5" id="vc-incline" value="${s.incline ?? ''}"></label></div>
       <label class="field" style="margin-top:8px">목적 / purpose<select id="vc-purpose"><option value="" ${!s.purpose ? 'selected' : ''}>자동 (종료 ≥ 3 → MLSS 규칙) / auto</option><option value="lt1" ${s.purpose === 'lt1' ? 'selected' : ''}>LT1 검증 / LT1 check</option><option value="mlss" ${s.purpose === 'mlss' ? 'selected' : ''}>MLSS(LT2) 검증 / MLSS check</option></select></label>
       <div class="grid3" style="margin-top:8px"><label class="field">안정 시 / rest<input type="number" step="0.1" id="vc-rest" value="${c.rest ?? ''}"></label><label class="field">10분 / mid<input type="number" step="0.1" id="vc-mid" value="${c.mid ?? ''}"></label><label class="field">종료 / end<input type="number" step="0.1" id="vc-end" value="${c.end ?? ''}"></label></div>
-      <div class="row" style="margin-top:8px;align-items:flex-end"><label class="field grow">달리기 종료 (분:초) / run ended at (min:s)<input type="text" id="vc-runend" inputmode="numeric" autocomplete="off" value="${fmtClock(endSec)}"></label>${ew.sure ? '' : '<button class="compact" id="vc-runend-ok">확정 <span class="en">confirm</span></button>'}</div>
+      <div class="row" style="margin-top:8px;align-items:flex-end"><label class="field grow">달리기 종료 (분:초 · 3505 = 35:05) / run ended at (min:s)<input type="text" id="vc-runend" inputmode="numeric" autocomplete="off" value="${fmtClock(endSec)}"></label>${ew.sure ? '' : '<button class="compact" id="vc-runend-ok">확정 <span class="en">confirm</span></button>'}</div>
       <p class="small muted" id="vc-runend-how" style="margin-top:4px">${how[0]}${tail[0]}${back[0]} <span class="en">${how[1]}${tail[1]}${back[1]}</span></p>
       ${unsure}
       <p class="small muted" id="vc-last5" style="margin-top:6px">${lastLbl[0]}${est[0]}: 심박 ${n0(ew.hr)} bpm · α1 ${n2(ew.alpha1)} <span class="en">${lastLbl[1]}${est[1]}: HR ${n0(ew.hr)} · α1 ${n2(ew.alpha1)}</span></p>
@@ -420,7 +431,7 @@ async function renderSessionDetail(id) {
   const re = document.getElementById('vc-runend'); if (re) re.onchange = async () => {
     if (re.value.trim() === '') { await setRunEnd(null); return; }
     const sec = parseClock(re.value); const w = endWindowStats(s, 300); const rec = Math.round((w.endT - s.startedAt) / 1000 + w.tailSec);
-    if (!(sec > 0) || sec > rec) { toast(`0:01 – ${fmtClock(rec)} (분:초 / min:s)`, 3000); re.value = fmtClock((w.endT - s.startedAt) / 1000); return; }
+    if (!(sec > 0) || sec > rec) { toast(`0:01 – ${fmtClock(rec)} 사이의 시각을 입력하세요 (예: 35:05 = 3505 = 35.05) / enter a time in that range`, 4000); re.value = fmtClock((w.endT - s.startedAt) / 1000); return; }
     await setRunEnd(sec);
   };
   const reOk = document.getElementById('vc-runend-ok'); if (reOk) reOk.onclick = async () => { const w = endWindowStats(s, 300); await setRunEnd(Math.round((w.endT - s.startedAt) / 1000)); };
