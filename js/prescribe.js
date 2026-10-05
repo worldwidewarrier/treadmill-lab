@@ -196,9 +196,13 @@ export function endOnlyProxy(session) {
 export function lactateVerdict(session) {
   const c = lactateChecks(session); const sp = session.speed; const type = session.type;
   if (c.end == null) return null;
+  const isMlss = session.purpose === 'mlss' || (session.purpose !== 'lt1' && (type === 'lt2' || (type === 'free' && c.end >= 3)));
+  const vd = verdictCore(session, c, isMlss); return vd ? { kind: isMlss ? 'mlss' : 'lt1', ...vd } : null;
+}
+function verdictCore(session, c, isMlss) {
+  const sp = session.speed;
   const spTxt = Number.isFinite(sp) ? ` @ ${sp} km/h` : '';
   const rise = c.rest != null ? c.end - c.rest : null; const delta = c.mid != null ? c.end - c.mid : null;
-  const isMlss = session.purpose === 'mlss' || (session.purpose !== 'lt1' && (type === 'lt2' || (type === 'free' && c.end >= 3)));
   if (isMlss) {
     if (delta != null) {
       if (delta <= 1.0 && c.end < 8) return { level: 'ok', adjust: { lt2Speed: +0.3 }, ko: `MLSS 이하 확인${spTxt}: 10분→종료 상승 ${delta.toFixed(1)} mmol/L (≤1.0). 다음 검증은 +0.3 km/h.`, en: `At/below MLSS${spTxt}: 10-min→end rise ${delta.toFixed(1)} mmol/L (≤1.0). Next verification +0.3 km/h.` };
@@ -221,6 +225,28 @@ export function lactateVerdict(session) {
   if (tooHigh) return { level: 'high', adjust: { lt1Hr: -4 }, ko: `종료 젖산 ${c.end}${rise != null ? ` (안정 시 +${rise.toFixed(1)})` : ''} — LT1 위${spTxt}. 목표 심박 −4 bpm 후 재검증.`, en: `End lactate ${c.end}${rise != null ? ` (+${rise.toFixed(1)} over rest)` : ''} — above LT1${spTxt}. Target HR −4 bpm, then verify again.` };
   if (border) return { level: 'near', adjust: { lt1Hr: -2 }, ko: `종료 젖산 ${c.end} — LT1 경계${spTxt}. 목표 심박 −2 bpm.`, en: `End lactate ${c.end} — borderline LT1${spTxt}. Target HR −2 bpm.` };
   return { level: 'ok', adjust: null, ko: `종료 젖산 ${c.end}${rise != null ? ` (안정 시 +${rise.toFixed(1)})` : ''} — LT1 아래 확인${spTxt}.`, en: `End lactate ${c.end}${rise != null ? ` (+${rise.toFixed(1)} over rest)` : ''} — below LT1 confirmed${spTxt}.` };
+}
+/**
+ * Zone change proposed by a verification verdict, using the run's own speed and steady-state HR.
+ * Confirmed runs raise a floor (LT ≥ this speed/HR); failed runs lower a cap (LT < this speed/HR). Returns null when nothing changes.
+ */
+export function verdictZoneChange(zones, session, vd = lactateVerdict(session)) {
+  if (!vd) return null; const z = zones || {}; const ew = endWindowStats(session, 300); const sp = session.speed;
+  const hr = Number.isFinite(ew.hr) ? Math.round(ew.hr) : NaN; const out = { ...z }; const r1 = v => Math.round(v * 10) / 10;
+  const up = (k, v) => { if (Number.isFinite(v) && !(z[k] >= v)) out[k] = v; }; const down = (k, v) => { if (Number.isFinite(v) && !(z[k] <= v)) out[k] = v; };
+  if (vd.kind === 'mlss') {
+    if (vd.level === 'ok' || vd.level === 'low') { up('lt2Speed', Number.isFinite(sp) ? r1(sp) : NaN); up('lt2Hr', hr); }
+    else if (vd.level === 'high') { down('lt2Speed', Number.isFinite(sp) ? r1(sp - 0.3) : NaN); down('lt2Hr', Number.isFinite(hr) ? hr - 3 : NaN); }
+  } else {
+    if (vd.level === 'ok') { up('lt1Speed', Number.isFinite(sp) ? r1(sp) : NaN); up('lt1Hr', hr); }
+    else if (vd.level === 'near') { down('lt1Speed', Number.isFinite(sp) ? r1(sp) : NaN); down('lt1Hr', Number.isFinite(hr) ? hr - 2 : NaN); }
+    else if (vd.level === 'high') { down('lt1Speed', Number.isFinite(sp) ? r1(sp - 0.5) : NaN); down('lt1Hr', Number.isFinite(hr) ? hr - 5 : NaN); }
+  }
+  const keys = ['lt1Hr', 'lt1Speed', 'lt2Hr', 'lt2Speed'].filter(k => out[k] !== z[k] && Number.isFinite(out[k]));
+  if (!keys.length) return null;
+  const fmt = k => `${k.startsWith('lt1') ? 'LT1' : 'LT2'} ${k.endsWith('Hr') ? `${Number.isFinite(z[k]) ? Math.round(z[k]) : '–'}→${out[k]} bpm` : `${Number.isFinite(z[k]) ? z[k] : '–'}→${out[k]} km/h`}`;
+  const txt = keys.map(fmt).join(', ');
+  return { zones: out, keys, ko: txt, en: txt };
 }
 /** Multi-day lactate curve: constant-speed sessions (last `days`) with an end sample → lactate vs speed (+ end-HR). */
 export function multiDayCurve(sessions, { days = 60, incline = null } = {}) {

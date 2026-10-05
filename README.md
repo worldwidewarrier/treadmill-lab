@@ -38,6 +38,7 @@ EN: Check Settings → practise with Session → Step test → Demo ×10 → imp
    - LT1 세션: 종료 젖산 ≤ 2.0 (안정 시 +1.0 이내) → LT1 아래 ✓ · 2.0–2.5 → 목표 −2 bpm · > 2.5 → 목표 −4 bpm 후 재검증
    - LT2 세션(MLSS): 30분 일정 속도, **10분과 30분** 두 번 채혈 → 상승 ≤ 1.0 mmol/L → MLSS 이하 ✓(다음 +0.3 km/h) · > 1.0 → 0.3–0.5 km/h 낮추기
    - **중간 채혈이 어려우면(종료 1회만)**: 30분을 완주하고 종료 젖산 + 대리 지표로 판정 — 심박 드리프트(8–13분 → 마지막 5분) ≤ 6 bpm이고 SmO2 안정이면 'MLSS 이하 가능성 높음'(다음 +0.3), 드리프트 > 8 bpm·SmO2 계속 하락·RPE ≥ 18 중 하나면 'MLSS 초과 가능성'(−0.3), 그 사이면 경계(재검). 25분 미만이면 판정 보류. 검증 카드의 「목적」을 MLSS로 두면 종료 값이 3 미만이어도 MLSS 규칙으로 판정합니다.
+   - **존 반영**: 검증 카드의 「존에 반영」은 그 런의 속도와 마지막 5분 심박으로 역치를 갱신합니다 — 통과한 런은 **하한**(LT ≥ 그 속도/심박)을 올리고, 실패한 런은 **상한**(LT1: 속도 −0.5·심박 −5, MLSS: 속도 −0.3·심박 −3)을 내립니다. 현재 존과 모순되지 않으면 바꾸지 않습니다. Free·LT1·LT2 어느 모드의 세션이든 같습니다.
 3. **다일 젖산 곡선**: 다른 날 다른 속도(예 8·9·10·11·12 km/h)로 검증 세션을 쌓으면 분석 탭이 종료 젖산–속도–심박 곡선을 만들어 LT1/LT2를 계산합니다(3점부터, 5점 이상 B등급). 러닝머신을 멈출 필요가 없고 안정 상태 생리에 더 가깝습니다.
 
 EN: Set sampling pause to 0 for a continuous α1-only step test (HRVT1/2). Then run constant-speed **verification sessions** with the treadmill speed entered and one end-of-run lactate sample: LT1 runs → end ≤ 2.0 mmol/L confirms; LT2 runs → sample at 10 and 30 min, a rise ≤ 1.0 confirms MLSS. Several such runs at different speeds form the **multi-day lactate curve** in Analysis, which yields LT1/LT2 without ever stopping mid-run.
