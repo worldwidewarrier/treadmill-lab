@@ -1,7 +1,7 @@
 // Where the running stopped (analysis.js runTimeline) and everything the verification card derives from it.
 // Sessions are simulated: heart rate with realistic on/off kinetics, noise and slow wander; the moment the belt stopped is known.
 import { runTimeline, pauseIntervals, runWindowStart, runWindowEnd, stoppedMs, smo2Steady, RUN_END } from '../js/analysis.js';
-import { lactateChecks, lactateVerdict, endWindowStats, endOnlyProxy, verdictZoneChange, multiDayCurve, sessionMetrics } from '../js/prescribe.js';
+import { lactateChecks, lactateVerdict, endWindowStats, endOnlyProxy, verdictZoneChange, multiDayCurve, sessionMetrics, claudeSummary } from '../js/prescribe.js';
 
 let failures = 0; const check = (n, c, d = '') => { console.log((c ? 'PASS ' : 'FAIL ') + n + (d ? '  ' + d : '')); if (!c) failures++; };
 const T0 = Date.UTC(2026, 9, 7, 6, 0, 0);
@@ -409,6 +409,26 @@ const truthHr = (s, a, b) => mean(s.hrLive.filter(p => p[0] >= T0 + a * 1000 && 
   check('runWindowStart skips over stops', runWindowStart(tl2, 300) === 1000000 - 300000 - 60000 && runWindowStart(tl2, 100) === 900000 && runWindowStart(tl2, 240) === 760000 && runWindowStart(tl2, 241) === 699000 && runWindowStart(tl2, 5000) === 0, [300, 100, 240, 241, 5000].map(x => runWindowStart(tl2, x)).join());
   check('runWindowEnd skips over stops', runWindowEnd(tl2, 0, 100) === 100000 && runWindowEnd(tl2, 150000, 100) === 310000 && runWindowEnd(tl2, 150000, 50) === 200000 && runWindowEnd(tl2, 230000, 30) === 290000 && runWindowEnd(tl2, 650000, 300) === 1010000, [[0, 100], [150000, 100], [150000, 50], [230000, 30], [650000, 300]].map(x => runWindowEnd(tl2, x[0], x[1])).join());
   check('stoppedMs counts the standing that lies inside', stoppedMs(tl2, 0, 1000000) === 70000 && stoppedMs(tl2, 230000, 720000) === 30000 && stoppedMs(tl2, 300000, 600000) === 0 && stoppedMs(tl2, 0, 710000) === 50000);
+}
+
+// ───────────── 16. The copied summary says where the run ended and how that was found ─────────────
+{
+  const RUN = 2100; const line = s => claudeSummary({ session: s, metrics: sessionMetrics(s) }).split('\n').find(l => l.startsWith('Constant load')) || '';
+  const hrA = simHr({ segs: [{ until: RUN, hr: 138 }, { until: RUN + 90, hr: 96, fast: 0.5 }, { until: RUN + 400, hr: 110, tau: 40 }], seed: 5 });
+  const a = mk({ hr: hrA, speed: 8.6, lactate: [[RUN + 60, 1.9]] }); const la = line(a); const ea = rel(a, runTimeline(a).end);
+  check('summary, value typed at the stop: run end, how it was found, the tail, running time', la.includes(`run ended at ${mmss(ea)} (found by: heart-rate drop before the lactate entry; the recording went on for ${mmss(RUN + 400 - ea)})`) && !la.includes('UNCERTAIN') && la.includes(`running time ${(ea / 60).toFixed(1)} min`), la.slice(0, 220));
+  const b = mk({ hr: hrA, speed: 8.6 }); b.lactateChecks = { end: 1.9 }; const lb = line(b);
+  check('summary, nothing logged near the end: the estimate is marked UNCERTAIN', /run ended at \d+:\d\d \(found by: heart rate alone; the recording went on for \d+:\d\d\) — UNCERTAIN: the last-5-min figures are estimates/.test(lb), lb.slice(0, 260));
+  const c = mk({ hr: simHr({ segs: [{ until: RUN, hr: 138 }], seed: 6 }), speed: 8.6, lactate: [] }); c.lactateChecks = { end: 1.7 }; const lc = line(c);
+  check('summary, Finish pressed while running: end of the recording, no tail', lc.includes(`run ended at ${mmss(RUN)} (found by: end of the recording)`) && !lc.includes('UNCERTAIN') && !lc.includes('went on'), lc.slice(0, 200));
+  const d = mk({ hr: hrA, speed: 8.6, lactate: [[RUN + 60, 1.9]], extra: { runEndSec: 2000 } }); const ld = line(d);
+  check('summary, end typed in the card: entered by hand', ld.includes('run ended at 33:20 (found by: entered by hand; the recording went on for 8:20)') && ld.includes('running time 33.3 min'), ld.slice(0, 200));
+  // LT2 mode, 3 × 8 min with 3-min recoveries: not one run — the line must not present the last rep as the session's running time
+  const segs = [{ until: 600, hr: 125 }]; const phases = [[0, 'warmup']]; let t = 600;
+  for (let i = 0; i < 3; i++) { phases.push([t, 'work']); segs.push({ until: t + 480, hr: 160 }); t += 480; if (i < 2) { phases.push([t, 'rest']); segs.push({ until: t + 180, hr: 125, tau: 40 }); t += 180; } }
+  phases.push([t, 'cooldown']); segs.push({ until: t + 240, hr: 118, tau: 45 });
+  const e = mk({ hr: simHr({ segs, seed: 8 }), type: 'lt2', phases, lactate: [[t + 60, 3.8]] }); const le = line(e);
+  check('summary, interval session: named as such, with the last rep', /interval session — last rep \d+\.\d min/.test(le) && !le.includes('running time'), le.slice(0, 200));
 }
 
 console.log(failures ? `\n${failures} FAILED` : '\nALL PASS'); process.exit(failures ? 1 : 0);
