@@ -164,6 +164,19 @@ export const RUN_END = {
 function hrSeries(session) {
   let src = (session.hrLive || []).filter(p => p && p[1] > 0 && Number.isFinite(p[0]));
   for (let i = 1; i < src.length; i++) if (src[i][0] < src[i - 1][0]) { src.sort((a, b) => a[0] - b[0]); break; }
+  // A file with a value only every few seconds (a watch on "smart recording") is filled in to one a second, because the rules below
+  // count seconds; a gap of more than a minute stays a gap. A live recording (a value a second, or one per beat) is taken as it is.
+  if (src.length > 2) {
+    const d = new Float64Array(src.length - 1); for (let i = 1; i < src.length; i++) d[i - 1] = src[i][0] - src[i - 1][0];
+    if (median(d) > 1500) {
+      const out = [];
+      for (let i = 0; i < src.length; i++) {
+        out.push(src[i]); if (i + 1 === src.length) break;
+        const g = src[i + 1][0] - src[i][0]; if (g > 1500 && g <= 60000) for (let t = src[i][0] + 1000; t < src[i + 1][0] - 400; t += 1000) out.push([t, src[i][1] + (src[i + 1][1] - src[i][1]) * (t - src[i][0]) / g]);
+      }
+      src = out;
+    }
+  }
   const n = src.length; const T = new Float64Array(n), V = new Float64Array(n); for (let i = 0; i < n; i++) { T[i] = src[i][0]; V[i] = src[i][1]; }
   const lb = t => { let lo = 0, hi = n; while (lo < hi) { const m = (lo + hi) >> 1; if (T[m] < t) lo = m + 1; else hi = m; } return lo; }; // first sample at or after t
   /** Median of the samples with a ≤ t < b; NaN when there are fewer than minN. */
@@ -357,7 +370,7 @@ function buildTimeline(session) {
     const same = near(ep.stopT, 30000);
     if (!same) { eps.push({ ...ep, src: 'sample', events: [e] }); continue; }
     const rb = reboundStop(H, same, same.events.length ? same.events[same.events.length - 1].t : same.stopT, e.t, tRec); // a second finger, or typed after running again?
-    if (!rb) same.events.push(e);
+    if (!rb) { same.events.push(e); if (ep.twoStep) same.twoStep = true; } // (the later value sees more of the picture: a second step down after the first value)
     else if (rb.running) { same.ranOn = true; if (same.backT == null) same.backT = rb.peakT; } // no stop of its own (yet): this value goes by the clock, and `same` did not end the run
     else { const own = near(rb.stopT, 30000); if (own) own.events.push(e); else eps.push({ ...rb, src: 'sample', events: [e] }); }
   }
@@ -370,7 +383,7 @@ function buildTimeline(session) {
     const byPause = Math.abs(ep.stopT - p[0]) <= 60000 && p[0] <= ep.stopT; // Pause was pressed at the stop: its time is exact, the heart rate lags a few seconds
     if (byPause) ep = { ...ep, stopT: p[0], exact: true };
     const same = near(ep.stopT, 60000);
-    if (same) { if (ep.stopT < same.stopT) { same.stopT = ep.stopT; if (byPause) { same.src = 'pause'; same.exact = true; } } }
+    if (same) { if (ep.stopT < same.stopT || (byPause && ep.stopT === same.stopT)) { same.stopT = ep.stopT; if (byPause) { same.src = 'pause'; same.exact = true; } } }
     else eps.push({ ...ep, src: 'pause', events: [] });
   }
   eps.sort((a, b) => a.stopT - b.stopT);
@@ -397,15 +410,17 @@ function buildTimeline(session) {
     else if (tail != null) { end = tail; how = 'hr'; sure = false; why = 'no-entry'; }
   }
   if (end < start) end = start;
-  const stops = eps.filter(o => o !== final && o.backT != null && o.stopT < end && o.backT > o.stopT).map(o => [o.stopT, Math.min(o.backT, end), Math.min(Math.max(o.troughT, o.stopT), o.backT, end)]);
+  const stops = eps.filter(o => o.backT != null && o.stopT < end && o.backT > o.stopT).map(o => [o.stopT, Math.min(o.backT, end), Math.min(Math.max(o.troughT, o.stopT), o.backT, end)]);
   // 3) what each logged value is
-  // (an end that is not relied on files nothing: there the clock of the recording decides, as it always did)
+  // A value typed after the last stop is taken for the end sample also when the time of that stop is not relied on (by the clock, an end
+  // value followed minutes later by a recovery value would become a "10-min → end" pair). An end that is only estimated from the heart
+  // rate, with nothing logged, files nothing: there the clock of the recording decides, as it always did.
   const endR = sure ? end : tRec; const dur = (endR - t0) / 1000; const tol = how === 'manual' ? 60000 : 0; const samples = [];
   for (const e of lac) {
     if (!Number.isFinite(e.value)) continue;
     const own = eps.find(o => o.events.includes(e)); let role;
     if (e.t <= restLimit) role = 'rest';
-    else if (sure && how !== 'finish' && e.t >= end - tol) role = 'end';             // taken after the running had stopped
+    else if ((sure || final) && how !== 'finish' && e.t >= end - tol) role = 'end';  // taken after the running had stopped
     else if (own && own !== final) role = 'mid';                                     // its own stop was followed by more running
     else { const rel = (e.t - t0) / 1000; role = (rel >= dur - 300 || rel >= dur * 0.85) ? 'end' : 'mid'; } // no stop of its own: by the clock (last 5 min / 15 % of the run)
     samples.push({ t: e.t, value: e.value, role });

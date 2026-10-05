@@ -3,6 +3,8 @@ import { analyzeLactate, interp } from './lactate.js';
 import { smo2Steady, runTimeline, inStop, alphaTainted, runWindowStart, runWindowEnd, stoppedMs } from './analysis.js';
 const r1 = v => Math.round(v * 10) / 10;
 const mean = a => a.length ? a.reduce((s, v) => s + v, 0) / a.length : NaN;
+/** Do the samples [[t, …], …] span at least `ms`? */
+const covers = (pts, ms) => { let a = Infinity, b = -Infinity; for (const p of pts) { if (p[0] < a) a = p[0]; if (p[0] > b) b = p[0]; } return b - a >= ms; };
 /** Length of the α1 window the session was recorded with: an α1 value stamped t is made of the beats of [t − window, t]. */
 const alphaWindowMs = session => ((session.alpha1Settings && Number(session.alpha1Settings.windowSec)) || 120) * 1000;
 
@@ -200,7 +202,9 @@ export function lactateChecks(session) {
  */
 export function endWindowStats(session, sec = 300) {
   const tl = runTimeline(session); const t1 = tl.end; const from = runWindowStart(tl, sec); const settle = alphaWindowMs(session);
-  const hr = (session.hrLive || []).filter(p => p[0] >= from && p[0] <= t1 && p[1] > 0 && !inStop(tl, p[0])).map(p => p[1]);
+  const pts = (session.hrLive || []).filter(p => p[0] >= from && p[0] <= t1 && p[1] > 0 && !inStop(tl, p[0]));
+  // (a mean needs something to stand on: a few seconds of heart rate left in the window — the strap taken off minutes before Finish — are not "the last 5 min")
+  const hr = covers(pts, 60000) ? pts.map(p => p[1]) : [];
   // α1: the stops decide what was running, not the app's Pause flag (see runTimeline)
   const a1 = (session.features || []).filter(f => f.t >= from && Number.isFinite(f.alpha1) && !alphaTainted(tl, f.t, settle)).map(f => f.alpha1);
   return { hr: mean(hr), alpha1: mean(a1), endT: t1, fromT: from, how: tl.how, sure: tl.sure, why: tl.why, tailSec: tl.tailSec, bouts: tl.bouts, entryT: tl.entryT };
@@ -217,8 +221,9 @@ export function endOnlyProxy(session) {
   const hrs = (session.hrLive || []).filter(p => p[1] > 0 && !inStop(tl, p[0]));
   const from = runWindowStart(tl, 300);
   const earlyTo = runWindowEnd(tl, t0 + 480000, 300); // 5 min of running from minute 8 on: minutes 8–13, or a little later when a stop falls into them
-  const early = hrs.filter(p => p[0] >= t0 + 480000 && p[0] < earlyTo && p[0] <= t1).map(p => p[1]); const late = hrs.filter(p => p[0] >= from && p[0] <= t1).map(p => p[1]);
-  const driftBpm = single && early.length >= 10 && late.length >= 10 ? mean(late) - mean(early) : NaN;
+  const earlyP = hrs.filter(p => p[0] >= t0 + 480000 && p[0] < earlyTo && p[0] <= t1), lateP = hrs.filter(p => p[0] >= from && p[0] <= t1);
+  const early = earlyP.map(p => p[1]), late = lateP.map(p => p[1]);
+  const driftBpm = single && early.length >= 10 && late.length >= 10 && covers(earlyP, 60000) && covers(lateP, 60000) ? mean(late) - mean(early) : NaN;
   const ss = smo2Steady(session); const rpe = (session.events || []).filter(e => e.type === 'rpe' && Number.isFinite(e.value)); const rpeEnd = rpe.length ? rpe[rpe.length - 1].value : null;
   return { durMin, driftBpm, smo2Steady: ss ? ss.steady : null, rpeEnd, single, sure: tl.sure, how: tl.how };
 }

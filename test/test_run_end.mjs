@@ -99,6 +99,8 @@ const truthHr = (s, a, b) => mean(s.hrLive.filter(p => p[0] >= T0 + a * 1000 && 
   const naive = mean(hr.filter(p => p[0] >= tl.end - 300000 && p[0] <= tl.end).map(p => p[1])) - mean(hr.filter(p => p[0] >= T0 + 480000 && p[0] < T0 + 780000).map(p => p[1]));
   check('  (the stop counted in would have added several bpm)', naive - px.driftBpm > 3, `naive ${naive.toFixed(1)}`);
   const m = sessionMetrics(s); check('  session α1 leaves out the standing and the 2 min after it', Math.abs(m.meanAlpha1 - 0.45) < 1e-9 && m.minAlpha1 === 0.45, `mean α1 ${m.meanAlpha1}`);
+  const running = hr.filter(p => p[0] <= tl.end && !(p[0] > tl.stops[0][0] && p[0] < tl.stops[0][1])).map(p => p[1]);
+  check('  session heart rate: that of the running — neither the stop for the sample nor the recovery at the end is in it', Math.abs(m.meanHr - mean(running)) < 1e-9 && m.meanHr - mean(hr.map(p => p[1])) > 1.5, `${m.meanHr.toFixed(1)} (whole recording ${mean(hr.map(p => p[1])).toFixed(1)})`);
   // the value typed only after running again → the same stop
   const s2 = mk({ hr, purpose: 'mlss', lactate: [[790, 3.4], [END + 70, 4.1]] }); const c2 = lactateChecks(s2); const t2 = runTimeline(s2);
   check('10-min value typed 2 min after running again: still the mid sample of that stop', c2.mid === 3.4 && c2.end === 4.1 && t2.stops.length === 1 && Math.abs(rel(s2, t2.stops[0][0]) - 600) <= 20, JSON.stringify(c2));
@@ -225,7 +227,10 @@ const truthHr = (s, a, b) => mean(s.hrLive.filter(p => p[0] >= T0 + a * 1000 && 
   const none = mk({ hr: [], lactate: [[30, 1.1], [600, 2.0], [1750, 2.4]], endSec: 1800, speed: 9 }); const cn = lactateChecks(none);
   check('no heart rate recorded: samples by the clock, nothing breaks', runTimeline(none).how === 'finish' && cn.rest === 1.1 && cn.mid === 2.0 && cn.end === 2.4 && Number.isNaN(endWindowStats(none).hr) && lactateVerdict(none).level === 'near');
   const sparse = mk({ hr: simHr({ segs: [{ until: 1800, hr: 150 }, { until: 1900, hr: 105, fast: 0.5 }], seed: 45, step: 5 }), lactate: [[1860, 2.4]], speed: 9 });
-  check('one heart-rate value every 5 s: too thin to time a stop — falls back to the recording, no error', ['finish', 'sample', 'hr'].includes(runTimeline(sparse).how) && Number.isFinite(endWindowStats(sparse).hr));
+  check('one heart-rate value every 5 s (an imported file): filled in to one a second, the stop is timed as usual', runTimeline(sparse).how === 'sample' && runTimeline(sparse).sure && Math.abs(rel(sparse, runTimeline(sparse).end) - 1800) <= 20 && Math.abs(endWindowStats(sparse).hr - 150) < 1, `${runTimeline(sparse).how} ${mmss(rel(sparse, runTimeline(sparse).end))}`);
+  // the same watch file with a 10-min hole from the stop on (auto-pause): nothing is made up across the hole
+  const holed = mk({ hr: simHr({ segs: [{ until: 1800, hr: 150 }, { until: 2700, hr: 120, tau: 40 }], seed: 45, step: 5, gaps: [[1803, 2400]] }), extra: { lactateChecks: { end: 2.4 } }, speed: 9 }); const th = runTimeline(holed);
+  check('  a 10-min hole in such a file stays a hole (the end is estimated at the last value before it, flagged — not a slow slide drawn across it)', th.how === 'hr' && !th.sure && Math.abs(rel(holed, th.end) - 1800) <= 30, `${th.how} ${mmss(rel(holed, th.end))}`);
   // strap silent around the stop
   const gap = mk({ hr: simHr({ segs: [{ until: 1800, hr: 150 }, { until: 2000, hr: 100, fast: 0.5 }], seed: 46, gaps: [[1770, 1840]] }), lactate: [[1860, 2.4]], speed: 9 }); const tg = runTimeline(gap);
   check('strap silent from 30 s before the stop to 40 s after: the end is put at the last running seconds or flagged, never later than the stop + 45 s', (tg.how === 'sample' || tg.how === 'hr') ? rel(gap, tg.end) <= 1845 : true, `${tg.how} ${mmss(rel(gap, tg.end))} sure ${tg.sure}`);
@@ -467,6 +472,245 @@ const truthHr = (s, a, b) => mean(s.hrLive.filter(p => p[0] >= T0 + a * 1000 && 
     check('  … and an end typed by hand is still taken', t2 && t2.how === 'manual' && t2.sure === true && rel(byHand, t2.end) === 1800 && Math.abs(t2.tailSec - 200) < 1.5, t2 ? `${t2.how} ${rel(byHand, t2.end)}` : ''); }
   check(`${n} records with fields of the wrong kind, missing fields, times out of order: nothing throws`, threw === 0, threw ? `${threw} threw — ${first}` : `slowest ${slowest.toFixed(0)} ms`);
   check('  and none takes long', slowest < 500, `${slowest.toFixed(0)} ms`);
+}
+
+// ───────────── 18. One scenario for each rule ─────────────
+{
+  // — interval sessions —
+  const segs = [{ until: 600, hr: 125 }]; const ph = [[0, 'warmup']]; let t = 600; for (let i = 0; i < 3; i++) { ph.push([t, 'work']); segs.push({ until: t + 480, hr: 160 + i }); t += 480; if (i < 2) { ph.push([t, 'rest']); segs.push({ until: t + 180, hr: 125, tau: 45 }); t += 180; } } ph.push([t, 'cooldown']); segs.push({ until: t + 200, hr: 112, fast: 0.5 });
+  const ivHr = simHr({ segs, seed: 81 }); const iv = (lac, more = {}) => mk({ hr: ivHr, type: 'lt2', phases: ph, lactate: lac, ...more }); const lv = lac => lactateVerdict(iv(lac)).level;
+  check('interval verdict by the value after the last rep: < 3 low · 3–4.5 on target · up to 6 a little high · 6 and more high', lv([[t + 50, 2.9]]) === 'low' && lv([[t + 50, 3.0]]) === 'ok' && lv([[t + 50, 4.5]]) === 'ok' && lv([[t + 50, 4.6]]) === 'near' && lv([[t + 50, 5.9]]) === 'near' && lv([[t + 50, 6.0]]) === 'high', [2.9, 3.0, 4.5, 4.6, 5.9, 6.0].map(v => lv([[t + 50, v]])).join(' '));
+  check('  …and by the rise across the reps: +1.0 is fine, more is not', lv([[600 + 480 + 50, 3.0], [t + 50, 4.0]]) === 'ok' && lv([[600 + 480 + 50, 3.0], [t + 50, 4.5]]) === 'high');
+  { const smo = sec => 60 - 0.2 * sec / 60; const ss = smo2Steady(iv([[t + 50, 3.8]], { smo2: smo }));
+    check('  SmO2 of an interval session is read over the whole session (not over the last rep as if it were a run)', ss && ss.coverageSec > 2000, ss ? `${Math.round(ss.coverageSec)} s` : 'none'); }
+  { const s2 = [{ until: 600, hr: 125 }, { until: 1500, hr: 158 }, { until: 1740, hr: 122, tau: 45 }, { until: 2640, hr: sec => 158 + 8 * (sec - 1740) / 900 }, { until: 2840, hr: 110, fast: 0.5 }];
+    const two = mk({ hr: simHr({ segs: s2, seed: 82 }), type: 'lt2', phases: [[0, 'warmup'], [600, 'work'], [1500, 'rest'], [1740, 'work'], [2640, 'cooldown']], lactate: [[2700, 4.0]] });
+    check('2 × 15 min: no drift figure across reps, however long the last one is', Number.isNaN(endOnlyProxy(two).driftBpm) && endOnlyProxy(two).single === false && lactateVerdict(two).intervals === true); }
+  { const WU = 600, REP = 1800; const one = mk({ hr: simHr({ segs: [{ until: WU, hr: 125 }, { until: WU + REP, hr: 158 }, { until: WU + REP + 300, hr: 108, fast: 0.5 }], seed: 83 }), type: 'lt2', phases: [[0, 'warmup'], [WU, 'work'], [WU + REP, 'cooldown']], lactate: [[WU + REP + 60, 4.0]] });
+    check('LT2 session: the session numbers are not cut at the end of the run (they are those of the work phases, as before)', Math.abs(sessionMetrics(one).meanHr - truthHr(one, 0, WU + REP + 301)) < 1e-9); }
+
+  // — windows —
+  { const lvl = sec => 150 + 8 * Math.max(0, sec - 800) / 1200; const hr = simHr({ segs: [{ until: 490, hr: 150 }, { until: 740, hr: 105, fast: 0.4 }, { until: 2000, hr: lvl }, { until: 2100, hr: 104, fast: 0.5 }], seed: 84 });
+    const s = mk({ hr, purpose: 'mlss', lactate: [[560, 3.2], [2060, 4.0]] }); const px = endOnlyProxy(s); const tl = runTimeline(s); const truth = truthHr(s, 1700, 2000) - truthHr(s, 830, 1130);
+    check('a 4-min stop in minutes 8–12: the early drift window is the 5 min of running after it', tl.stops.length === 1 && Number.isFinite(px.driftBpm) && Math.abs(px.driftBpm - truth) < 1.5, `drift ${px.driftBpm.toFixed(1)}, by hand ${truth.toFixed(1)}`); }
+  { const END = 1875; const level = sec => 150 + 6 * Math.min(1, sec / 600) + 8 * Math.max(0, sec - 675) / 1200;
+    const hr = simHr({ segs: [{ until: 600, hr: level }, { until: 675, hr: 112, fast: 0.4 }, { until: END, hr: level }, { until: END + 120, hr: 104, fast: 0.5 }], seed: 85 });
+    const smo = sec => (sec >= 612 && sec < 690) || sec >= END + 2 ? 74 : 62 - 0.4 * Math.max(0, sec - 675) / 60; // 74 % within seconds of standing still, falling 0.4 %/min while running
+    const s = mk({ hr, purpose: 'mlss', lactate: [[650, 3.4], [END + 70, 4.1]], smo2: smo }); const ss = smo2Steady(s);
+    check('SmO2 with a 10-min stop: the rebound at the stop and at the end is in none of the figures', ss.max <= 62.01 && Math.abs(ss.slopeEnd + 0.4) < 0.01 && ss.steady === false, `max ${ss.max.toFixed(1)}, end slope ${ss.slopeEnd.toFixed(3)}`); }
+  { const RUN = 1800; const hr = simHr({ segs: [{ until: RUN, hr: 158 }, { until: RUN + 150, hr: 105, fast: 0.5 }], seed: 86 }); const L = [[RUN + 60, 4.0]];
+    const bySample = runTimeline(mk({ hr, lactate: L })), byHand = runTimeline(mk({ hr, lactate: L, extra: { runEndSec: RUN } })), byPause = runTimeline(mk({ hr, lactate: L, pauses: [[RUN, null]] })), byHr = runTimeline(mk({ hr, extra: { lactateChecks: { end: 4 } } })), byFinish = runTimeline(mk({ hr: hr.filter(p => p[0] <= T0 + RUN * 1000), extra: { lactateChecks: { end: 4 } } }));
+    check('how late an end may be: 15 s when the heart rate timed it, nothing when it was pressed, typed, or the recording simply ended', bySample.lagMs === 15000 && byHr.lagMs === 15000 && byHr.how === 'hr' && byHand.lagMs === 0 && byPause.lagMs === 0 && byPause.how === 'pause' && byFinish.lagMs === 0 && byFinish.how === 'finish', [bySample, byHr, byHand, byPause, byFinish].map(x => `${x.how}:${x.lagMs}`).join(' '));
+    const a1 = sec => sec > RUN ? 1.2 : sec > RUN - 60 ? 0.30 : 0.45; // a marker: lower in the last minute of running
+    const sA = mk({ hr, lactate: L, a1 }); const tA = runTimeline(sA); const stA = sA.features.filter(f => f.t >= tA.end - 300000 && f.t <= tA.end - 15000).map(f => f.alpha1);
+    check('  α1 of the last 5 min stops 15 s short of a heart-rate-timed end and takes everything before that', Math.abs(endWindowStats(sA).alpha1 - mean(stA)) < 1e-9 && stA.length >= 56 && stA.every(v => v <= 0.45) && stA.some(v => v === 0.30), `${endWindowStats(sA).alpha1.toFixed(4)} from ${stA.length} values`);
+    const sB = mk({ hr, lactate: L, a1, extra: { runEndSec: RUN } }); const stB = sB.features.filter(f => f.t >= T0 + (RUN - 300) * 1000 && f.t <= T0 + RUN * 1000).map(f => f.alpha1);
+    check('  …and runs right up to an end that was typed', Math.abs(endWindowStats(sB).alpha1 - mean(stB)) < 1e-9 && stB.length === 61); }
+  { const RUN = 1800; const hr = simHr({ segs: [{ until: RUN, hr: 150 }, { until: RUN + 120, hr: 100, fast: 0.5 }], seed: 87 });
+    const a = runTimeline(mk({ hr, lactate: [[RUN + 60, 2.0]] })), b = runTimeline(mk({ hr: [...hr.slice(900), ...hr.slice(0, 900)], lactate: [[RUN + 60, 2.0]], endSec: RUN + 120 }));
+    check('heart-rate samples stored out of order give the same answer', a.how === 'sample' && b.how === 'sample' && a.end === b.end && b.sure, `${mmss((a.end - T0) / 1000)} / ${b.how} ${mmss((b.end - T0) / 1000)}`); }
+  { const RUN = 1800; const hr = simHr({ segs: [{ until: RUN, hr: 150 }, { until: RUN + 120, hr: 100, fast: 0.5 }], seed: 87 });
+    const strapOff = mk({ hr: hr.filter(p => p[0] <= T0 + RUN * 1000), extra: { lactateChecks: { end: 2.0 } }, endSec: RUN + 285, speed: 9 }); const ew = endWindowStats(strapOff);
+    check('strap taken off at the stop, Finish nearly 5 min later: 15 s of heart rate are not "the last 5 min" — no figure, no heart rate for the zones', runTimeline(strapOff).how === 'finish' && Number.isNaN(ew.hr) && Number.isNaN(endOnlyProxy(strapOff).driftBpm) && (() => { const z = verdictZoneChange({ lt1Hr: 100, lt1Speed: 5 }, strapOff); return z && z.zones.lt1Hr === 100 && z.zones.lt1Speed === 9; })()); }
+
+  // — which value is which —
+  { const RUN = 1800; const hr = simHr({ segs: [{ until: RUN, hr: 158 }, { until: RUN + 150, hr: 105, fast: 0.5 }], seed: 86 });
+    const s = mk({ hr, purpose: 'mlss', lactate: [[RUN + 40, 4.0]], extra: { runEndSec: RUN + 60 } }); const c = lactateChecks(s);
+    check('end typed by hand 20 s after the value was saved: the value is still the end sample (a minute of tolerance)', c.end === 4.0 && c.mid === null, JSON.stringify(c)); }
+  { const hr = simHr({ segs: [{ until: 900, hr: 158 }, { until: 2100, hr: 140, tau: 40 }], seed: 34 }); // pace lowered for good at 15:00; Finish at 35:00 while running; nothing typed anywhere near either
+    const s = mk({ hr, speed: 9, lactate: [[600, 2.0], [1700, 2.6]] }); const tl = runTimeline(s); const c = lactateChecks(s);
+    check('an end that is only estimated files nothing: the values stay where the clock of the recording puts them', tl.how === 'hr' && !tl.sure && Math.abs(rel(s, tl.end) - 900) <= 30 && c.mid === 2.0 && c.end === null, `${tl.how} ${mmss(rel(s, tl.end))} ${JSON.stringify(c)}`); }
+  { const hr = simHr({ segs: [{ until: 1800, hr: 160 }, { until: 1890, hr: 112, fast: 0.5 }, { until: 2400, hr: 128, tau: 40 }], seed: 5 });
+    const two = mk({ hr, speed: 10.8, purpose: 'mlss', lactate: [[1860, 4.4], [2290, 3.1]] }); const c = lactateChecks(two); const vd = lactateVerdict(two);
+    check('a value at the stop and a recovery value 8 min later: the first is the end sample — no "rise −1.3" verdict out of the pair', runTimeline(two).why === 'late-entry' && c.end === 4.4 && c.mid === null && vd.unsure === true && !/rise/.test(vd.en), `${JSON.stringify(c)} ${vd.en.slice(0, 50)}`);
+    const late = mk({ hr, speed: 10.8, purpose: 'mlss', lactate: [[2270, 4.4]] }); const cl = lactateChecks(late);
+    check('one value, typed 8 min after the stop while walking, 2 min before Finish: the end sample (not a "10-min" value by the clock)', runTimeline(late).why === 'late-entry' && cl.end === 4.4 && cl.mid === null, JSON.stringify(cl)); }
+
+  // — did the last stop end the run? —
+  { const hr = simHr({ segs: [{ until: 1800, hr: 158 }, { until: 1880, hr: 112, fast: 0.5 }, { until: 2060, hr: 157 }], seed: 88 }); // sample at 30:00, then 3 more minutes at speed, Finish while running
+    const s = mk({ hr, purpose: 'mlss', lactate: [[1860, 4.2]] }); const tl = runTimeline(s);
+    check('3 more minutes at speed after the end sample, Finish while running: the sample still ended the run', tl.how === 'sample' && tl.sure && Math.abs(rel(s, tl.end) - 1800) <= 20 && lactateChecks(s).end === 4.2, `${tl.how} ${mmss(rel(s, tl.end))}`); }
+  { const hr = simHr({ segs: [{ until: 600, hr: 156 }, { until: 675, hr: 112, fast: 0.4 }, { until: 1800, hr: 158 }], seed: 89 }); // 10-min sample, nothing typed after it, Finish while running at 30:00
+    const s = mk({ hr, purpose: 'mlss', lactate: [[650, 3.4]] }); const tl = runTimeline(s); const c = lactateChecks(s);
+    check('10-min sample, 19 more minutes, Finish while running: the stop lies inside the run and the value is the 10-min one', tl.how === 'finish' && tl.sure && tl.stops.length === 1 && c.mid === 3.4 && c.end === null && Math.abs(endOnlyProxy(s).durMin - (30 - (tl.stops[0][2] - tl.stops[0][0]) / 60000)) < 1e-9, `${tl.how} ${JSON.stringify(c)}`); }
+  { const hr = simHr({ segs: [{ until: 600, hr: 156 }, { until: 675, hr: 112, fast: 0.4 }, { until: 745, hr: 156 }], seed: 90 }); // 10-min sample; a second value saved 50 s after running again; Finish 20 s later, still running
+    const s = mk({ hr, purpose: 'mlss', lactate: [[650, 3.4], [725, 3.9]] }); const tl = runTimeline(s); const c = lactateChecks(s);
+    check('a value saved while running again (heart rate on its way back up), Finish at once: the earlier stop is not taken for a certain end, the values keep their places', !(tl.sure && tl.how === 'sample') && c.mid === 3.4 && c.end === 3.9, `${tl.how}${tl.sure ? '' : ' (not relied on)'} ${JSON.stringify(c)}`); }
+  { const hr = simHr({ segs: [{ until: 600, hr: 156 }, { until: 675, hr: 112, fast: 0.4 }, { until: 1050, hr: 144 }, { until: 1350, hr: 156 }], seed: 95 }); // after the sample 6 min easier, then back at speed; a value saved at 22:25 while running; Finish 5 s later
+    const s = mk({ hr, purpose: 'mlss', lactate: [[650, 3.4], [1345, 3.9]] }); const tl = runTimeline(s); const c = lactateChecks(s);
+    check('back at speed only minutes before Finish, a value saved while running: that value is the end sample, the old stop is not the end', tl.how === 'finish' && c.mid === 3.4 && c.end === 3.9, `${tl.how} ${mmss(rel(s, tl.end))} ${JSON.stringify(c)}`); }
+  { const lvl = 158; const hr = simHr({ segs: [{ until: 600, hr: lvl }, { until: 670, hr: 113, fast: 0.5 }, { until: 725, hr: lvl + 3 }, { until: 800, hr: 110, fast: 0.5 }], seed: 96 }); // given up 55 s after the 10-min sample
+    const s = mk({ hr, purpose: 'mlss', lactate: [[650, 4.1], [780, 7.2]] }); const tl = runTimeline(s); const c = lactateChecks(s);
+    check('given up 55 s after the 10-min sample (the heart rate had come up 15+ bpm): two stops, 4.1 the 10-min value, 7.2 the end value', c.mid === 4.1 && c.end === 7.2 && Math.abs(rel(s, tl.end) - 725) <= 20 && tl.stops.length === 1, `${JSON.stringify(c)} end ${mmss(rel(s, tl.end))} stops ${tl.stops.length}`); }
+  { const END = 1875; const level = sec => 150 + 6 * Math.min(1, sec / 600) + 8 * Math.max(0, sec - 675) / 1200; const hr = simHr({ segs: [{ until: 600, hr: level }, { until: 675, hr: 112, fast: 0.4 }, { until: END, hr: level }, { until: END + 120, hr: 104, fast: 0.5 }], seed: 5 });
+    const s = mk({ hr, purpose: 'mlss', lactate: [[675 + 240, 3.4], [END + 70, 4.1]] }); const tl = runTimeline(s);
+    check('10-min value saved 4 min after running again: it still marks that stop', tl.stops.length === 1 && Math.abs(rel(s, tl.stops[0][0]) - 600) <= 20 && lactateChecks(s).mid === 3.4, `stops ${tl.stops.length}`); }
+  { const hr = simHr({ segs: [{ until: 600, hr: 156 }, { until: 670, hr: 143, tau: 30 }, { until: 1110, hr: 157 }], seed: 94 }); // the 10-min sample taken at a walk (13 bpm down for a minute); a second value saved at 18:00 while running; Finish at 18:30, running
+    const s = mk({ hr, purpose: 'mlss', lactate: [[645, 3.4], [1080, 3.9]] }); const tl = runTimeline(s); const c = lactateChecks(s);
+    check('a value saved while running, 6 min after a shallow stop was over, is not a second finger of that stop', tl.how === 'finish' && tl.stops.length === 1 && c.mid === 3.4 && c.end === 3.9, `${tl.how} stops ${tl.stops.length} ${JSON.stringify(c)}`); }
+
+  // — Pause —
+  { const RUN = 1800; const hr = simHr({ segs: [{ until: RUN, hr: 158 }, { until: RUN + 200, hr: 110, tau: 70 }], seed: 91 }); // no fast phase: the heart rate lingers at its level
+    const s = mk({ hr, purpose: 'mlss', lactate: [[RUN + 80, 4.0]], pauses: [[RUN, null]] }); const tl = runTimeline(s); const alone = runTimeline(mk({ hr, purpose: 'mlss', lactate: [[RUN + 80, 4.0]] }));
+    check('Pause pressed at the stop: its time is the end, to the second (by the heart rate alone it would be later)', tl.how === 'pause' && tl.end === T0 + RUN * 1000 && tl.lagMs === 0 && alone.end > tl.end && alone.how === 'sample', `Pause ${mmss(rel(s, tl.end))}, heart rate alone ${mmss((alone.end - T0) / 1000)}`); }
+  { const hr = simHr({ segs: [{ until: 600, hr: 156 }, { until: 675, hr: 112, fast: 0.4 }, { until: 1800, hr: 158 }, { until: 1900, hr: 104, fast: 0.5 }], seed: 92 }); // a stop at 10:00 that nothing logged; Pause touched at 15:00 for 20 s while running
+    const s = mk({ hr, purpose: 'mlss', lactate: [[1860, 4.0]], pauses: [[900, 920]] }); const tl = runTimeline(s);
+    check('a Pause touched while running, minutes after a stop that nothing logged, does not lay claim to that stop', tl.stops.length === 0 && tl.how === 'sample' && tl.sure, `stops ${tl.stops.length}`); }
+  { const RUN = 1800; const hr = simHr({ segs: [{ until: RUN, hr: 158 }, { until: RUN + 12, hr: 110, tau: 70 }], seed: 93 });
+    const s = mk({ hr, purpose: 'mlss', pauses: [[RUN, null]], extra: { lactateChecks: { end: 4.0 } } }); const tl = runTimeline(s);
+    check('Pause, Finish 12 s later, the heart rate has hardly moved yet: the Pause is the end', tl.how === 'pause' && tl.sure && tl.end === T0 + RUN * 1000 && Math.abs(tl.tailSec - 12) < 1e-9, `${tl.how} ${mmss(rel(s, tl.end))}`); }
+  { const lvl = 158; const hr = simHr({ segs: [{ until: 600, hr: lvl }, { until: 688, hr: 113, fast: 0.5 }, { until: 790, hr: lvl + 2 }, { until: 900, hr: 108, fast: 0.5 }], seed: 97 }); // Pause for the 10-min draw (nothing typed), running again for 100 s, then given up; the value typed after that
+    const s = mk({ hr, purpose: 'mlss', lactate: [[850, 7.2]], pauses: [[603, 688]] }); const tl = runTimeline(s);
+    check('Pause for the 10-min draw, given up 100 s later: the value belongs to the second stop, the Pause marks the first', lactateChecks(s).end === 7.2 && Math.abs(rel(s, tl.end) - 790) <= 20 && tl.stops.length === 1 && tl.stops[0][0] === T0 + 603000, `end ${mmss(rel(s, tl.end))} stops ${tl.stops.map(x => mmss(rel(s, x[0]))).join()}`); }
+
+  // — levels, surges, staircases —
+  { const run = sec => 148 + 16 * sec / 2100; const hr = simHr({ segs: [{ until: 2100, hr: run }, { until: 2400, hr: sec => 164 - 10 * (sec - 2100) / 300, tau: 15 }, { until: 2640, hr: 154, tau: 30 }, { until: 2740, hr: 104, fast: 0.5 }], seed: 98 });
+    const s = mk({ hr, purpose: 'mlss', lactate: [[2700, 4.0]] }); const tl = runTimeline(s); // a drifting run, eased by degrees over 5 min (2 bpm a minute: no step anywhere) to a jog 10 below, 4 min of that, then the stop
+    check('eased by degrees to a jog before the sample (drifting run, so the jog is not far below the run as a whole): flagged, not relied on', tl.how === 'sample' && !tl.sure && tl.why === 'level' && verdictZoneChange({ lt2Hr: 100, lt2Speed: 5 }, s, { kind: 'mlss', level: 'ok' }).zones.lt2Hr === 100, `${tl.how} ${tl.sure ? 'sure' : tl.why} end ${mmss(rel(s, tl.end))}`); }
+  { const hr = simHr({ segs: [{ until: 1500, hr: 150 }, { until: 1680, hr: 165, tau: 30 }, { until: 2040, hr: 150, tau: 40 }, { until: 2140, hr: 104, fast: 0.5 }], seed: 99 }); // a 3-min surge, then 6 min at the old level, then the stop
+    const s = mk({ hr, purpose: 'mlss', lactate: [[2100, 4.0]] }); const tl = runTimeline(s);
+    check('a surge that ended 6 min before the stop, the running going on at the old level: certain, and the end is the stop', tl.how === 'sample' && tl.sure && Math.abs(rel(s, tl.end) - 2040) <= 20, `${tl.sure ? 'sure' : tl.why} end ${mmss(rel(s, tl.end))}`); }
+  { const hr = simHr({ segs: [{ until: 1800, hr: 150 }, { until: 2160, hr: sec => 150 + 12 * (sec - 1800) / 360, tau: 10 }, { until: 2460, hr: 148, tau: 40 }], seed: 100 }); // the last 6 min faster and faster (+12 bpm, no step), then a walk; nothing logged
+    const s = mk({ hr, speed: 9, extra: { lactateChecks: { end: 2.4 } } }); const tl = runTimeline(s);
+    check('a progressive finish, then a walk 14 below it, nothing logged: an estimate at the stop (a gradual rise is no surge) — not "the recording ended while running"', tl.how === 'hr' && !tl.sure && Math.abs(rel(s, tl.end) - 2160) <= 25, `${tl.how} ${mmss(rel(s, tl.end))}`); }
+  { const hr = simHr({ segs: [{ until: 1200, hr: 150 }, { until: 1290, hr: 136, tau: 25 }, { until: 1900, hr: 143, tau: 30 }], seed: 102 }); // eased 14 bpm for 90 s, then on at 7 below the old level until Finish; nothing logged
+    const s = mk({ hr, speed: 9, extra: { lactateChecks: { end: 2.4 } } }); const tl = runTimeline(s);
+    check('nothing logged, a dip of 90 s and then on at 7 bpm below the old level: the heart rate did not stay down — no end is made of the dip', tl.how === 'finish' && tl.sure && tl.end === s.endedAt, `${tl.how} ${mmss(rel(s, tl.end))}`); }
+  { const hr = simHr({ segs: [{ until: 1800, hr: 160 }, { until: 2040, hr: 142, tau: 40 }, { until: 2140, hr: 100, tau: 55, fast: 0.4 }], seed: 103 }); // a value saved a minute into a 4-min jog 18 below, a second one after standing still
+    const s = mk({ hr, purpose: 'mlss', lactate: [[1860, 4.4], [2090, 4.6]] }); const tl = runTimeline(s);
+    check('a first value a minute after the first step down, a second after the second step 4 min later: two steps, minutes apart — flagged, the first value is the end sample', tl.how === 'sample' && !tl.sure && tl.why === 'two-steps' && Math.abs(rel(s, tl.end) - 1800) <= 30 && lactateChecks(s).end === 4.4, `${tl.sure ? 'sure' : tl.why} end ${mmss(rel(s, tl.end))}`); }
+  { const hr = simHr({ segs: [{ until: 1800, hr: 150 }, { until: 1860, hr: 110, fast: 0.5 }, { until: 2400, hr: 134, tau: 40 }, { until: 2700, hr: 150 }], seed: 101 }); // 30 min, a stop, a 9-min walk, 5 more minutes at speed until Finish; nothing logged
+    const s = mk({ hr, speed: 9, extra: { lactateChecks: { end: 2.4 } } }); const tl = runTimeline(s);
+    check('nothing logged and the recording ends at the running level after a break: the end of the recording, as before', tl.how === 'finish' && tl.sure && tl.end === s.endedAt, `${tl.how} ${mmss(rel(s, tl.end))}`); }
+}
+
+// ───────────── 19. Many kinds of runs, each with what really happened attached ─────────────
+{
+  // α1 as the engine would stamp it: 0.45 for a 2-min window of pure running, more the larger the share of it that was not running
+  const a1From = idle => sec => { let n = 0; for (const [a, b] of idle) n += Math.max(0, Math.min(sec, b) - Math.max(sec - 120, a)); return 0.45 + 0.75 * Math.min(1, n / 120); };
+  // SmO2: falls 0.4 %/min while running, rebounds toward 75 % within a minute of standing still
+  const smoFrom = idle => { const cache = []; let v = 68; return sec => { while (cache.length <= sec) { const s = cache.length; const st = idle.some(([a, b]) => s >= a && s < b); v += st ? (75 - v) / 25 : (-0.4 / 60) + (v > 68 ? (68 - v) / 60 : 0); cache.push(v); } return cache[Math.floor(sec)]; }; };
+  /** Scenario k: a session and the truth about it (end = second at which the run a sample belongs to ended; ambiguous = the picture has two readings). */
+  function scenario(k) {
+    const { u } = rng(k * 2654435761 + 17); const U = (a, b) => a + u() * (b - a), I = (a, b) => Math.floor(U(a, b + 1)), pick = a => a[Math.floor(u() * a.length)];
+    const fam = ['stand', 'stair', 'mlss10', 'giveup', 'surge', 'noentry', 'pause', 'fingers', 'lt2', 'noise', 'stand', 'mlss10'][k % 12];
+    const L = U(132, 170); const noise = U(0.8, 2.4), wander = U(0, 2.2); const seed = 5000 + k; const fast = U(0.3, 0.6), tauOff = U(45, 110);
+    const drift = U(0, 10); const run = I(1500, 2700); const lvl = sec => L + drift * Math.max(0, sec - 600) / 1500;
+    const P = { fam }; let segs = [], lactate = [], pauses = [], phases = null, type = 'free', purpose = pick([undefined, 'lt1', 'mlss']), idle = [], extra = {}, truth = {}, gaps = [], endSec = null, mod = null;
+    const standTo = () => L - U(28, 55);
+    if (fam === 'stand') { // the plain case: stop, stand, the value typed while standing (or later), then nothing / a walk / a jog
+      const stand = I(40, 180), typed = I(12, stand - 3), after = pick(['none', 'walk', 'jog', 'none', 'walk']); const aLen = after === 'none' ? 0 : I(60, 700); const aTo = after === 'walk' ? L - U(14, 40) : L - U(8, 14);
+      const typedLate = u() < 0.2 && aLen > 150; const tt = typedLate ? stand + I(30, Math.min(aLen - 10, 520)) : typed;
+      segs = [{ until: run, hr: lvl }, { until: run + stand, hr: standTo(), tau: tauOff, fast }]; if (aLen) segs.push({ until: run + stand + aLen, hr: aTo, tau: 40 });
+      const rest = u() < 0.4 ? [[I(20, 200), 1.1]] : []; lactate = [...rest, [run + tt, 2.2]]; if (u() < 0.2 && !typedLate && stand - typed > 25) lactate.push([run + typed + 20, 2.4]);
+      idle = [[run, run + stand + aLen + 1]]; truth = { end: run, endRole: 2.2, rest: rest.length ? 1.1 : null, mid: null };
+    } else if (fam === 'stair') { // walked or jogged first, then stood for the sample
+      const d1 = pick([I(30, 170), I(190, 600)]), D1 = U(8, 30), stand = I(60, 130), typed = I(20, stand - 5);
+      segs = [{ until: run, hr: lvl }, { until: run + d1, hr: L + drift * (run - 600) / 1500 - D1, tau: U(35, 55) }, { until: run + d1 + stand, hr: standTo() - 5, tau: tauOff, fast: fast * 0.8 }];
+      lactate = [[run + d1 + typed, 3.6]]; idle = [[run, run + d1 + stand + 1]]; truth = { end: run, endRole: 3.6, rest: null, mid: null, ambiguous: d1 > 180 || D1 < 12 }; Object.assign(P, { d1, D1 });
+    } else if (fam === 'mlss10') { // a stop for the 10-min sample, 20 more minutes, the stop for the end sample
+      const s1 = I(560, 640), stop1 = I(50, 130), run2 = I(1100, 1300), stand = I(50, 150), typed2 = I(15, stand - 3); const typed1 = u() < 0.75 ? I(15, stop1 - 2) : stop1 + I(20, 200); const e2 = s1 + stop1 + run2; const after = pick(['none', 'walk', 'none']); const aLen = after === 'none' ? 0 : I(60, 500);
+      const lv2 = sec => L + 4 + drift * Math.max(0, sec - s1 - stop1) / 1200;
+      segs = [{ until: s1, hr: L }, { until: s1 + stop1, hr: standTo(), tau: tauOff, fast }, { until: e2, hr: lv2 }, { until: e2 + stand, hr: standTo(), tau: tauOff, fast }]; if (aLen) segs.push({ until: e2 + stand + aLen, hr: L - U(15, 35), tau: 40 });
+      const skip1 = u() < 0.12; lactate = [[s1 + typed1, skip1 ? null : 3.4], [e2 + typed2, 4.1]]; if (u() < 0.15) lactate.push([e2 + typed2 + 25, 4.3]);
+      if (u() < 0.2) pauses = [[s1 + I(1, 6), s1 + stop1 - I(0, 5)]];
+      idle = [[s1, s1 + stop1], [e2, e2 + stand + aLen + 1]]; truth = { end: e2, endRole: 4.1, mid: skip1 ? null : 3.4, rest: null, stops: [[s1, s1 + stop1]] }; purpose = 'mlss';
+    } else if (fam === 'giveup') { // running again after the 10-min sample, given up 1–7 min later
+      const again = I(50, 420), tail = I(15, 150), typed = Math.min(tail - 3, I(10, 70)); const stop2 = 670 + again;
+      segs = [{ until: 600, hr: L }, { until: 670, hr: standTo(), tau: tauOff, fast }, { until: stop2, hr: L + 3 }, { until: stop2 + tail, hr: standTo(), tau: tauOff, fast }];
+      lactate = [[650, 4.1], [stop2 + typed, 7.2]]; idle = [[600, 670], [stop2, stop2 + tail + 1]]; truth = { end: stop2, endRole: 7.2, mid: 4.1, rest: null, stops: [[600, 670]] }; purpose = 'mlss';
+    } else if (fam === 'surge') { // a harder stretch: in mid-run, late, as a kick before the stop, or a kick followed by a jog at the old level
+      const kind = pick(['mid', 'late', 'kick', 'kickjog']); const up = U(10, 22), sLen = I(60, 300), stand = I(60, 140), typed = I(20, stand - 5); P.kind = kind;
+      if (kind === 'mid' || kind === 'late') { const back = kind === 'mid' ? I(400, 900) : I(30, 240); const s0 = run - back - sLen; segs = [{ until: s0, hr: L }, { until: s0 + sLen, hr: L + up, tau: 30 }, { until: run, hr: L, tau: 40 }, { until: run + stand, hr: standTo(), tau: tauOff, fast }]; truth = { end: run, ambiguous: kind === 'late' && back < 150 }; }
+      else if (kind === 'kick') { segs = [{ until: run - sLen, hr: L }, { until: run, hr: L + up, tau: 25 }, { until: run + stand, hr: standTo(), tau: tauOff, fast }]; truth = { end: run }; }
+      else { const jog = I(60, 400); segs = [{ until: run - sLen, hr: L }, { until: run, hr: L + up, tau: 25 }, { until: run + jog, hr: L - U(0, 6), tau: 40 }, { until: run + jog + stand, hr: standTo(), tau: tauOff, fast }]; truth = { end: run, ambiguous: true }; idle = [[run + jog, run + jog + stand + 1]]; }
+      const tEnd = segs[segs.length - 1].until; lactate = [[tEnd - stand + typed, 3.9]]; if (!idle.length) idle = [[run, tEnd + 1]]; truth.endRole = 3.9; truth.mid = null; truth.rest = null;
+    } else if (fam === 'noentry') { // nothing typed during the session (the value goes into the card afterwards)
+      const kind = pick(['stand', 'walk', 'jog', 'flat', 'lower', 'sofa', 'strapoff']); P.kind = kind;
+      if (kind === 'flat') { segs = [{ until: run, hr: lvl }]; truth = { end: run, flat: true }; }
+      else if (kind === 'lower') { const at = I(600, run - 600); segs = [{ until: at, hr: L }, { until: run, hr: L - U(10, 22), tau: 40 }]; truth = { end: run, ambiguous: true }; }
+      else if (kind === 'sofa') { segs = [{ until: run, hr: lvl }, { until: run + 500, hr: 72, tau: tauOff, fast }, { until: run + 2500, hr: 62, tau: 200 }, { until: run + 2800, hr: 86, tau: 30 }, { until: run + 5000, hr: 60, tau: 60 }]; truth = { end: run }; idle = [[run, run + 5001]]; }
+      else if (kind === 'strapoff') { const tail = I(60, 900); segs = [{ until: run, hr: lvl }, { until: run + 8, hr: L - 10, tau: 20 }]; endSec = run + 8 + tail; truth = { end: run }; idle = [[run, run + 9]]; }
+      else { const stand = kind === 'stand' ? I(60, 500) : I(40, 100); const aLen = kind === 'stand' ? 0 : I(100, 700); const aTo = kind === 'walk' ? L - U(14, 40) : L - U(8, 14); segs = [{ until: run, hr: lvl }, { until: run + stand, hr: standTo(), tau: tauOff, fast }]; if (aLen) segs.push({ until: run + stand + aLen, hr: aTo, tau: 40 }); truth = { end: run }; idle = [[run, run + stand + aLen + 1]]; }
+      extra = { lactateChecks: { end: pick([1.8, 2.4, 4.2]) } }; if (u() < 0.3) lactate = [[I(20, 200), 1.2]]; truth.rest = lactate.length ? 1.2 : null; truth.noEntry = true;
+    } else if (fam === 'pause') {
+      const kind = pick(['atstop', 'late', 'quick', 'accident', 'unconfirmed', 'early']); const stand = I(70, 160), typed = I(20, stand - 5); P.kind = kind;
+      segs = [{ until: run, hr: lvl }, { until: run + stand, hr: standTo(), tau: tauOff, fast: kind === 'atstop' && u() < 0.5 ? 0 : fast }]; lactate = [[run + typed, 4.0]]; idle = [[run, run + stand + 1]]; truth = { end: run, endRole: 4.0, mid: null, rest: null };
+      if (kind === 'atstop') pauses = [[run + I(0, 4), null]];                              // Pause pressed at the stop and never released
+      else if (kind === 'late') pauses = [[run + I(30, 60), null]];                         // …half a minute after it
+      else if (kind === 'quick') { const d = I(5, 40); segs[1].until = run + d; lactate = []; extra = { lactateChecks: { end: 4.0 } }; pauses = [[run, null]]; idle = [[run, run + d + 1]]; truth.endRole = undefined; } // Pause, Finish within seconds
+      else if (kind === 'accident') pauses = [[I(40, 900), null]];                           // touched during the run, never released
+      else if (kind === 'unconfirmed') pauses = [[I(300, 900), I(950, 1200)]];               // the app paused for minutes while the running went on
+      else { const p0 = run - I(5, 30); pauses = [[p0, null]]; truth.end = p0; }             // pressed some seconds before the belt stopped
+      purpose = 'mlss';
+    } else if (fam === 'fingers') { // more than one value at a stop, a stray value, a skipped entry, a late baseline
+      const kind = pick(['end3', 'mid2', 'stray', 'skipEnd', 'restLate']); const s1 = 600, stop1 = I(80, 140), e2 = s1 + stop1 + I(1100, 1300), stand = I(90, 170); P.kind = kind;
+      segs = [{ until: s1, hr: L }, { until: s1 + stop1, hr: standTo(), tau: tauOff, fast }, { until: e2, hr: L + 4 }, { until: e2 + stand, hr: standTo(), tau: tauOff, fast }]; idle = [[s1, s1 + stop1], [e2, e2 + stand + 1]]; truth = { end: e2, mid: 3.4, endRole: 4.1, rest: null, stops: [[s1, s1 + stop1]] };
+      if (kind === 'end3') lactate = [[s1 + 40, 3.4], [e2 + 30, 4.1], [e2 + 60, 4.4], [e2 + 85, 4.0]];
+      else if (kind === 'mid2') lactate = [[s1 + 35, 3.4], [s1 + 70, 3.7], [e2 + 40, 4.1]];
+      else if (kind === 'stray') lactate = [[s1 + 40, 3.4], [s1 + stop1 + I(400, 800), 3.9], [e2 + 40, 4.1]];
+      else if (kind === 'skipEnd') { lactate = [[s1 + 40, 3.4], [e2 + 40, null]]; extra = { lactateChecks: { end: 4.1 } }; }
+      else { lactate = [[I(100, 230), 1.0], [s1 + 40, 3.4], [e2 + 40, 4.1]]; truth.rest = 1.0; }
+      purpose = 'mlss';
+    } else if (fam === 'lt2') { // LT2 mode: one long rep (sometimes stopped before the clock), or intervals
+      const reps = pick([1, 1, 3, 4]), work = reps === 1 ? I(1500, 1900) : 480, rest = 180, wu = 600; type = 'lt2'; phases = [[0, 'warmup']]; segs = [{ until: wu, hr: L - 30 }]; let t = wu;
+      for (let i = 0; i < reps; i++) { phases.push([t, 'work']); segs.push({ until: t + work, hr: L + i }); t += work; if (i < reps - 1) { phases.push([t, 'rest']); segs.push({ until: t + rest, hr: L - 32, tau: 40 }); t += rest; } }
+      const early = reps === 1 && u() < 0.4 ? I(90, 400) : 0; if (early) { segs[segs.length - 1].until = t - early; segs.push({ until: t, hr: standTo(), tau: tauOff, fast }); }
+      phases.push([t, 'cooldown']); const cd = I(60, 360); segs.push({ until: t + cd, hr: early ? L - 40 : L - 38, tau: tauOff, fast: early ? 0 : fast });
+      const entry = u() < 0.7; if (entry) lactate = [[(early ? t - early : t) + I(25, 55), 3.8]]; else extra = { lactateChecks: { end: 3.8 } };
+      truth = { end: t - early, bouts: reps, endRole: entry ? 3.8 : undefined, mid: null, rest: null }; idle = [[t - early, t + cd + 1]];
+    } else { // odd data: a slow slide, false readings, the strap silent around the stop, samples out of order, a value only every 5 s
+      const kind = pick(['slide', 'dip', 'high', 'gapstop', 'unsorted', 'sparse']); const stand = I(70, 150), typed = I(20, stand - 5); P.kind = kind;
+      if (kind === 'slide') { segs = [{ until: run - 600, hr: L }, { until: run, hr: sec => L - U(10, 16) * (sec - (run - 600)) / 600, tau: 20 }]; lactate = [[run - 10, 2.2]]; truth = { end: run, flat: true, endRole: 2.2 }; }
+      else { segs = [{ until: run, hr: lvl }, { until: run + stand, hr: standTo(), tau: tauOff, fast }]; lactate = [[run + typed, 2.2]]; idle = [[run, run + stand + 1]]; truth = { end: run, endRole: 2.2 }; if (kind === 'gapstop') gaps = [[run - I(5, 40), run + I(10, 50)]]; }
+      truth.mid = null; truth.rest = null; mod = kind;
+    }
+    let hr = simHr({ segs, seed, noise, wander, gaps, step: mod === 'sparse' ? 5 : 1 });
+    if (mod === 'dip') { const a = T0 + (run - I(100, 400)) * 1000; hr = hr.map(p => (p[0] >= a && p[0] < a + 8000) ? [p[0], Math.round(p[1] / 2)] : p); }
+    if (mod === 'high') { const a = T0 + I(500, run - 400) * 1000; hr = hr.map(p => (p[0] >= a && p[0] < a + 90000) ? [p[0], p[1] + 22] : p); }
+    if (mod === 'unsorted') { for (let i = 50; i < hr.length - 1; i += 97) { const x = hr[i]; hr[i] = hr[i + 1]; hr[i + 1] = x; } }
+    const session = mk({ hr, type, speed: 10.5, purpose, lactate, pauses, phases, endSec, a1: a1From(idle), smo2: k % 5 === 0 ? smoFrom(idle) : null, extra });
+    return { fam, key: fam + (P.kind ? ':' + P.kind : ''), P, session, truth };
+  }
+  const N = 720; const F = {}; const get = k => F[k] || (F[k] = { n: 0, sure: 0, err: [], hrErr: [], a1Max: 0, rolesBad: [], wrong: [], stopsOk: 0, stopsN: 0, stopErr: [], durErr: [], hows: {}, smoBad: 0, smoN: 0, pauseOff: 0, estErr: [] });
+  for (let k = 1; k <= N; k++) {
+    const { fam, key, P, session: s, truth } = scenario(k); const f = get(key); f.n++;
+    const tl = runTimeline(s); const endSec = rel(s, tl.end); const c = lactateChecks(s); const ew = endWindowStats(s, 300); const px = endOnlyProxy(s);
+    f.hows[tl.how + (tl.sure ? '' : '?')] = (f.hows[tl.how + (tl.sure ? '' : '?')] || 0) + 1;
+    // the truth for "the last 5 min of running": 300 s back from the true end, a stop inside (and the minute of coming back up) skipped over
+    const inner = (truth.stops || []).map(x => [x[0], x[1] + 60]); let w0 = truth.end - 300; for (const x of inner.slice().reverse()) if (x[1] > w0 && x[0] < truth.end) w0 -= (Math.min(x[1], truth.end) - Math.max(x[0], w0));
+    const tv = []; for (const p of s.hrLive) { const sec = (p[0] - T0) / 1000; if (sec > truth.end || sec < w0 || inner.some(x => sec > x[0] && sec < x[1])) continue; tv.push(p[1]); }
+    if (tl.sure) { f.sure++;
+      if (tl.how !== 'finish' && !truth.ambiguous) { f.err.push(endSec - truth.end); if (Math.abs(endSec - truth.end) > 45) f.wrong.push(k); if (Number.isFinite(ew.hr)) f.hrErr.push(Math.abs(ew.hr - mean(tv))); if (Number.isFinite(ew.alpha1)) f.a1Max = Math.max(f.a1Max, ew.alpha1); }
+      if (truth.flat && tl.how !== 'finish') f.wrong.push(k);
+      if (tl.how === 'pause' && !s.events.some(e => e.type === 'pause' && e.t === tl.end)) f.pauseOff++;
+      if (truth.stops) { f.stopsN++; if (tl.stops.length === 1) { f.stopsOk++; f.stopErr.push(rel(s, tl.stops[0][0]) - truth.stops[0][0]); if (fam !== 'giveup') f.durErr.push(px.durMin - (truth.end - (truth.stops[0][1] - truth.stops[0][0])) / 60); } }
+      if (s.smo2 && fam === 'stand' && tl.how === 'sample') { const ss = smo2Steady(s); f.smoN++; if (!ss || Math.abs(ss.slopeEnd + 0.4) > 0.02 || ss.steady !== false) f.smoBad++; }
+    } else if (tl.how === 'hr') f.estErr.push(endSec - truth.end);
+    if (truth.endRole !== undefined && (c.rest !== (truth.rest ?? null) || c.mid !== (truth.mid ?? null) || c.end !== truth.endRole)) f.rolesBad.push(k);
+  }
+  const all = Object.values(F); const sum = fn => all.reduce((a, f) => a + fn(f), 0); const cat = (keys, field) => keys.flatMap(k => F[k] ? F[k][field] : []);
+  const qq = (a, p) => { const b = a.slice().sort((x, y) => x - y); return b.length ? b[Math.min(b.length - 1, Math.floor(p * b.length))] : NaN; };
+  const wrong = all.flatMap(f => f.wrong), rolesBad = all.flatMap(f => f.rolesBad);
+  check(`${N} generated sessions of ${Object.keys(F).length} kinds: no end that is called certain lies more than 45 s from the true one`, wrong.length === 0, wrong.length ? `scenarios ${wrong.slice(0, 8).join(', ')}` : `${sum(f => f.sure)} certain, ${N - sum(f => f.sure)} not relied on`);
+  const hrMax = Math.max(...all.flatMap(f => f.hrErr)); check('  last-5-min heart rate of a certain end: within 1 bpm of the heart rate of the last 5 min of running', hrMax < 1.0, `largest difference ${hrMax.toFixed(2)} bpm`);
+  check('  α1 of a certain end is that of the running (a Pause pressed a few seconds after the stop lets those seconds in, no more)', Math.max(...all.map(f => f.a1Max)) <= 0.452, `largest ${Math.max(...all.map(f => f.a1Max)).toFixed(4)} (pure running = 0.45, standing = 1.2)`);
+  check('  every value is filed as what it was (baseline / 10-min / end)', rolesBad.length === 0, rolesBad.length ? `scenarios ${rolesBad.slice(0, 8).join(', ')}` : '');
+  const clean = ['stand', 'mlss10', 'fingers:end3', 'fingers:mid2', 'fingers:stray', 'fingers:skipEnd', 'fingers:restLate', 'pause:late', 'pause:unconfirmed', 'pause:accident', 'noise:high', 'noise:unsorted', 'noise:dip', 'noise:sparse', 'surge:mid', 'surge:kick', 'surge:late']; const ce = cat(clean, 'err');
+  check('  timing of a stop for a sample (stand-still after the run): median within 5 s, 95 % within 8 s, none later than 12 s, none earlier than 25 s', qq(ce, 0.5) <= 5 && qq(ce, 0.5) >= 0 && qq(ce, 0.95) <= 8 && qq(ce, 1) <= 12 && qq(ce, 0) >= -25, `n ${ce.length}: min ${qq(ce, 0)}, median ${qq(ce, 0.5)}, 95 % ${qq(ce, 0.95)}, max ${qq(ce, 1)} s`);
+  const st = F.stair; check('  walked or jogged first, then stood: when called certain, the end is where the walking began (−10 … +25 s)', st.err.length >= 20 && qq(st.err, 0) >= -10 && qq(st.err, 1) <= 25, `n ${st.err.length}: ${qq(st.err, 0)} … ${qq(st.err, 1)} s; ${st.n - st.sure} of ${st.n} not relied on`);
+  const stops = ['mlss10', 'fingers:end3', 'fingers:mid2', 'fingers:stray', 'fingers:skipEnd', 'fingers:restLate', 'giveup']; const se = cat(stops, 'stopErr'), de = cat(stops, 'durErr');
+  check('  a stop for the 10-min sample: found in every certain session, exactly once', stops.every(k => F[k].stopsOk === F[k].stopsN) && se.length > 200, stops.map(k => `${F[k].stopsOk}/${F[k].stopsN}`).join(' '));
+  check('  …its beginning within −15 … +10 s, the running time within 0.45 min of the true one', qq(se, 0) >= -15 && qq(se, 1) <= 10 && qq(de, 0) >= -0.45 && qq(de, 1) <= 0.45, `start ${qq(se, 0)} … ${qq(se, 1)} s, running time ${qq(de, 0).toFixed(2)} … ${qq(de, 1).toFixed(2)} min`);
+  check('  SmO2 end slope of the runs with a sensor file: that of the running (−0.40 %/min, not steady), untouched by the rebound after the stop', F.stand.smoN >= 15 && F.stand.smoBad === 0, `${F.stand.smoBad} of ${F.stand.smoN} off`);
+  check('  an end marked by Pause is the moment Pause was pressed', sum(f => f.pauseOff) === 0 && (F['pause:early'].hows.pause || 0) >= 10 && (F['pause:quick'].hows.pause || 0) === F['pause:quick'].n);
+  const never = ['noentry:stand', 'noentry:walk', 'noentry:jog', 'noentry:lower', 'noentry:sofa']; const ne = cat(['noentry:stand', 'noentry:walk', 'noentry:sofa'], 'estErr');
+  check('  nothing typed during the session and a tail after the run: never certain — an estimate (within 45 s of the true end after a stand-still or a walk)', never.every(k => F[k].sure === 0 && F[k].hows['hr?'] === F[k].n) && ne.length >= 20 && qq(ne, 0) >= -45 && qq(ne, 1) <= 45, `estimates ${qq(ne, 0)} … ${qq(ne, 1)} s`);
+  check('  Finish while running, or a slow slide with a value typed while running: the end of the recording', F['noentry:flat'].hows.finish === F['noentry:flat'].n && F['noise:slide'].hows.finish === F['noise:slide'].n);
+  const rate = k => F[k].sure / F[k].n;
+  check('  how often the plain cases are called certain: stand-still ≥ 95 %, with a 10-min stop 100 %, a surge in mid-run ≥ 80 %, LT2 mode ≥ 90 %', rate('stand') >= 0.95 && rate('mlss10') === 1 && rate('surge:mid') >= 0.8 && rate('lt2') >= 0.9, `${(100 * rate('stand')).toFixed(0)} / ${(100 * rate('mlss10')).toFixed(0)} / ${(100 * rate('surge:mid')).toFixed(0)} / ${(100 * rate('lt2')).toFixed(0)} %`);
+  { let n = 0, sure = 0, flagged = 0, nLong = 0; for (let k = 1; k <= N; k++) { if (k % 12 !== 1) continue; const { P, session: s } = scenario(k); const tl = runTimeline(s); if (P.d1 <= 170 && P.D1 >= 12) { n++; if (tl.sure) sure++; } if (P.d1 >= 190 && P.D1 >= 12) { nLong++; if (!tl.sure) flagged++; } }
+    check('  a walk of under 3 min before standing leaves no doubt; one of more than 3 min is flagged (two steps down, minutes apart)', n >= 10 && sure === n && nLong >= 10 && flagged >= 0.9 * nLong, `short walk: ${sure}/${n} certain; long walk: ${flagged}/${nLong} flagged`); }
 }
 
 console.log(failures ? `\n${failures} FAILED` : '\nALL PASS'); process.exit(failures ? 1 : 0);

@@ -34,14 +34,20 @@ EN: Check Settings → practise with Session → Step test → Demo ×10 → imp
 
 **권장 조합 (α1 기준 + 젖산 검증):**
 1. **연속 단계 테스트(α1 전용)**: 설정 → 프로토콜 → 채혈 초 = `0`. 정지 없이 3분 단계가 이어지고 HRVT1/HRVT2(α1 0.75/0.5)가 나옵니다. 시작 전·종료 직후 젖산은 참고용으로 기록.
-2. **검증 세션**: 세션 탭에서 **자유(Free) 모드**에 러닝머신 속도를 입력하고 「채혈 알림」에 분을 적습니다(MLSS: `10,30`, LT1 35분: `35`) → 30초 전 예고 + 정각에 음성·진동 → 벨트를 멈추고 채혈 → 「젖산 입력」(시각에 따라 안정 시/10분/종료로 자동 배치). 분석 화면의 **젖산 검증** 카드가 판정합니다 (종료 ≥ 3 mmol/L이면 MLSS 규칙 자동 적용). LT2 세션 모드는 MLSS가 정해진 뒤 인터벌 훈련(4×8 …)에 씁니다.
+2. **검증 세션**: 세션 탭에서 **자유(Free) 모드**에 러닝머신 속도를 입력하고 「채혈 알림」에 분을 적습니다(MLSS: `10,30`, LT1 35분: `35`) → 30초 전 예고 + 정각에 음성·진동 → 벨트를 멈추고 채혈 → **서 있는 동안** 「젖산 입력」(시작 4분 안 = 안정 시, 입력 뒤 다시 달렸으면 10분 값, 멈춘 뒤 입력하고 끝났으면 종료 값으로 자동 배치). 분석 화면의 **젖산 검증** 카드가 판정합니다 (종료 ≥ 3 mmol/L이면 MLSS 규칙 자동 적용). LT2 세션 모드는 MLSS가 정해진 뒤 인터벌 훈련(4×8 …)에 씁니다.
    - LT1 세션: 종료 젖산 ≤ 2.0 (안정 시 +1.0 이내) → LT1 아래 ✓ · 2.0–2.5 → 목표 −2 bpm · > 2.5 → 목표 −4 bpm 후 재검증
    - LT2 세션(MLSS): 30분 일정 속도, **10분과 30분** 두 번 채혈 → 상승 ≤ 1.0 mmol/L → MLSS 이하 ✓(다음 +0.3 km/h) · > 1.0 → 0.3–0.5 km/h 낮추기
    - **중간 채혈이 어려우면(종료 1회만)**: 30분을 완주하고 종료 젖산 + 대리 지표로 판정 — 심박 드리프트(8–13분 → 마지막 5분) ≤ 6 bpm이고 SmO2 안정이면 'MLSS 이하 가능성 높음'(다음 +0.3), 드리프트 > 8 bpm·SmO2 계속 하락·RPE ≥ 18 중 하나면 'MLSS 초과 가능성'(−0.3), 그 사이면 경계(재검). 25분 미만이면 판정 보류. 검증 카드의 「목적」을 MLSS로 두면 종료 값이 3 미만이어도 MLSS 규칙으로 판정합니다.
-   - **존 반영**: 검증 카드의 「존에 반영」은 그 런의 속도와 마지막 5분 심박으로 역치를 갱신합니다 — 통과한 런은 **하한**(LT ≥ 그 속도/심박)을 올리고, 실패한 런은 **상한**(LT1: 속도 −0.5·심박 −5, MLSS: 속도 −0.3·심박 −3)을 내립니다. 현재 존과 모순되지 않으면 바꾸지 않습니다. Free·LT1·LT2 어느 모드의 세션이든 같습니다.
+   - **젖산 값은 멈춘 직후, 쿨다운 전에 입력하세요 (v1.1.12).** 앱은 「젖산 입력」을 저장한 시각 바로 앞에서 심박이 달리기 수준을 떠난 지점을 찾아 그곳을 **달리기 종료**로 봅니다. 마지막 5분 심박·α1, 10→30분 드리프트, 달린 시간, SmO2 끝 기울기가 모두 거기서부터 계산되므로, 값을 입력한 뒤에는 쿨다운을 하든 「종료」를 늦게 누르든 결과가 같습니다. 10분 채혈로 잠깐 선 구간은 달린 시간과 심박 평균에서 빠집니다(앱을 일시정지할 필요 없음).
+     - 검증 카드의 **「달리기 종료」 칸**에 앱이 찾은 시각과 근거가 나옵니다. 다르면 직접 고치세요 — `35:05`, 숫자만 `3505`, `35.05` 모두 됩니다. 칸을 비우면 자동 판단으로 돌아갑니다.
+     - **「달리기 종료 시점 불확실」**이 뜨는 경우: ① 세션 중에 값을 입력하지 않고 나중에 카드에 적었고 기록이 달리기 뒤에도 이어진 경우(심박만으로 추정), ② 멈춘 뒤 6분 넘게 지나 입력한 값이 있는 경우, ③ 입력 전에 심박이 몇 분 간격으로 두 번 내려간 경우(쿨다운 조깅 뒤 채혈 등), ④ 멈추기 전부터 심박이 달리기 수준보다 낮았던 경우, ⑤ 멈춘 뒤 2분 넘게 지나 입력했는데 그동안 심박이 25 bpm도 안 내려간 경우(멈춘 것인지 속도만 낮춘 것인지 불분명). 이때 카드는 추정 시각을 보여 주되 **심박으로는 존을 바꾸지 않고(속도만 반영) 대리 지표 판정도 하지 않습니다.** 시각이 맞으면 「확정」, 아니면 실제 시각을 입력하면 풀립니다.
+     - 한계: 달리던 심박보다 8–10 bpm도 안 낮은 쿨다운(가벼운 조깅)은 달리기와 구별하지 못합니다 — 그럴 땐 「달리기 종료」를 직접 입력하세요. 끝에 속도를 낮추고 2분 안에 값을 입력하면 속도를 낮춘 시점이 달리기 종료가 됩니다.
+   - **존 반영**: 검증 카드의 「존에 반영」은 그 런의 속도와 **달리기 마지막 5분** 심박으로 역치를 갱신합니다 — 통과한 런은 **하한**(LT ≥ 그 속도/심박)을 올리고, 실패한 런은 **상한**(LT1: 속도 −0.5·심박 −5, MLSS: 속도 −0.3·심박 −3)을 내립니다. 현재 존과 모순되지 않으면 바꾸지 않습니다. Free·LT1 모드와 LT2 모드의 1회 반복(템포)은 같은 방식입니다.
+   - **인터벌(LT2 모드, 2회 이상 반복)**: 회복 구간에서 젖산이 빠지므로 LT1·MLSS 판정을 하지 않습니다. 마지막 반복 뒤 젖산이 3–4.5면 목표 강도, 반복 사이 상승이 1.0을 넘거나 6 이상이면 속도를 낮추라는 안내만 하고, 존은 바꾸지 않으며 다일 곡선에도 넣지 않습니다.
 3. **다일 젖산 곡선**: 다른 날 다른 속도(예 8·9·10·11·12 km/h)로 검증 세션을 쌓으면 분석 탭이 종료 젖산–속도–심박 곡선을 만들어 LT1/LT2를 계산합니다(3점부터, 5점 이상 B등급). 러닝머신을 멈출 필요가 없고 안정 상태 생리에 더 가깝습니다.
 
 EN: Set sampling pause to 0 for a continuous α1-only step test (HRVT1/2). Then run constant-speed **verification sessions** with the treadmill speed entered and one end-of-run lactate sample: LT1 runs → end ≤ 2.0 mmol/L confirms; LT2 runs → sample at 10 and 30 min, a rise ≤ 1.0 confirms MLSS. Several such runs at different speeds form the **multi-day lactate curve** in Analysis, which yields LT1/LT2 without ever stopping mid-run.
+**Type the lactate value right after you stop, before any cool-down (v1.1.12):** the card measures everything "at the end of the run" from where the heart rate left its running level before that entry — shown in the "run ended at" field, which you can correct (`35:05`, `3505` or `35.05`). After that a cool-down or a late Finish changes nothing. If nothing was logged near the end, or the picture has two readings (a value typed more than 6 min after the stop, two steps down minutes apart, a stop from a level below the run, a value typed minutes after a drop that never went deep), the card says the end is uncertain: it shows its estimate, but puts no heart rate into the zones and makes no proxy call until you confirm or correct the time. A cool-down less than 8–10 bpm below the run cannot be told from the run. Interval sessions (LT2 mode, two or more reps) get an interval verdict only and never change zones.
 
 ## 3. 장비 연결 방식 · How each device connects
 
@@ -66,7 +72,7 @@ H10은 블루투스 2개 + ANT+를 동시에 지원하므로 이 앱(RR) + Train
 - **심박 드리프트**: 마지막 1/3 vs 첫 1/3 (15분 이상 세션은 처음 5분 램프업 제외).
 - **일시정지**: 단계·인터벌·경과 시계가 멈추고, 재개하면 남은 시간이 그대로 이어집니다(기록은 계속되고 그 구간의 α1 행은 '일시정지'로 표시). 일시정지 중에 「단계 종료」나 「종료」를 누르면 그 단계는 일시정지를 누른 시점에 끝난 것으로 기록됩니다. 단계 표의 '마지막 60초'는 아직 벽시계 기준이라, 단계 끝 60초 안에 일시정지가 있으면 그 단계 값은 참고만 하세요.
 - **스트랩 무신호**: 5초 넘게 심박 알림이 없으면(범위 이탈·재연결 중) 그 구간의 행은 시간축만 남기고 심박·α1을 비웁니다(마지막 값을 되풀이해 적지 않음). 존 체류 시간도 세지 않습니다.
-- **검증 카드의 '마지막 5분'은 기록의 끝 기준입니다(알려진 한계).** 벨트를 멈춘 뒤 채혈·입력하는 동안에도 기록이 이어지므로, 「종료」를 늦게 누를수록 마지막 5분 심박은 낮게, 10→30분 드리프트는 작게, SmO2 끝 기울기는 높게 나와 MLSS 대리 판정이 '이하' 쪽으로 기웁니다. 고칠 때까지: 젖산 값을 입력하면 바로 「종료」를 누르고(걷기는 종료 후에), 정지 후 1분 넘게 기록이 이어진 런은 카드의 심박·드리프트와 「존에 반영」의 심박 값을 그대로 믿지 마세요(젖산 값 자체와 속도 판정은 영향 없음). 개선 작업은 `wip/verification-card` 브랜치에 있습니다(HANDOFF §2c).
+- **달리기 종료 시점 (검증 카드, v1.1.12)**: 기록은 「종료」를 누를 때까지 이어지지만 판정은 달리기가 끝난 지점까지로 합니다(`analysis.js` `runTimeline`). 정지는 **기록된 것이 있는 곳에서만** 찾습니다 — 「젖산 입력」(건너뛴 입력 포함), 심박이 확인해 주는 「일시정지」, LT2 세션의 반복 시계, 카드에 직접 넣은 시각. 심박은 그 시각을 정하는 데만 씁니다: 입력 시각 앞 12분 안에서, 직전 2분의 중앙값(달리기 수준)에 머물다가 10 bpm 이상 떨어지고 이어지는 1분이 8 bpm 이상 낮은 마지막 지점. 걷다가 선 경우(계단식 하강)는 첫 단계를 종료로 보고, 두 단계 사이가 3분을 넘으면 불확실로 표시합니다. 기록된 것이 없고 기록이 달리기 수준에서 끝나지 않으면 심박만으로 추정하되, **불확실한 종료에서는 심박에 기대는 결론을 내지 않습니다**(심박으로 존 변경 없음, 대리 판정 보류, 세션 숫자는 이전 버전 방식 그대로; 심박만으로 추정한 종료에서는 젖산 값 배치도 이전처럼 기록 시계 기준). 가져온 파일처럼 심박이 몇 초에 한 번만 있는 기록은 1초 간격으로 채워 같은 규칙을 적용하고, 마지막 5분 구간에 심박이 1분어치도 없으면(종료 전에 스트랩을 벗은 경우) 숫자를 내지 않습니다. 심박으로 잡은 종료는 실제보다 0–30초 늦을 수 있어 α1은 끝 15초를 버리고, 정지 뒤 2분(α1 창)의 α1도 쓰지 않습니다. 달리는 중에 「종료」를 누른 세션은 숫자가 이전 버전과 같습니다. 요약 복사와 CSV(`# run_end_s,…,found_by,…,certain,…`)에 종료 시각과 근거가 들어갑니다. 검증은 모의 심박(정지·걷기·조깅·서지·드리프트·끊김 조합 수천 건)으로 했고 실제 기록으로는 아직 못 했습니다 — 처음 몇 번은 카드의 「달리기 종료」 시각이 기억과 맞는지 확인하세요.
 - **처방**: 3존·5존, LT1 세션 = LT1 −10~−3 bpm(α1 ≥0.75 유지), LT2 세션 = LT2 ±3, 주 1회 LT2(4×8 → 4×10 → 5×10 → 회복 → 3×15 → 2×20 → 템포 30 → 회복), 긴 LT1 매주 +10분, 자동 조정(α1 <0.70 → −3 bpm 등), 8주 또는 드리프트 시 재검사.
 
 ## 5. 개발 · Development
@@ -82,12 +88,14 @@ node test/test_engine.mjs          # engine on a hand-driven clock: pause (clock
 node test/test_ble.mjs             # Bluetooth source against a mock strap: flaky reconnects, stuck GATT calls, failed / cancelled first connection, two sources on one strap (≈45 s)
 node test/test_alerts.mjs          # screen wake lock: one lock, the last of several quick on/off requests wins
 node test/test_verify.mjs          # lactate verification verdicts, zone updates, multi-day curve
+node test/test_run_end.mjs         # where the running stopped: simulated runs with stops, walks, jogs, surges, pauses, gaps; uncertain ends; odd records (≈10 s)
 TZ=Asia/Seoul node test/test_importers.mjs   # Garmin FIT + RR text always; Train.Red / FatMaxxer parts when the private files are present
 node test/test_version.mjs         # APP_VERSION (app.js) == sw.js VERSION
 TZ=Asia/Seoul node test/test_align.mjs       # SmO2 clock-offset estimator (synthetic lags + real Train.Red file if present)
 node test/ui_smoke.mjs             # headless Chromium at 384×604 (needs playwright + the dev server on :8765)
 node test/ui_flows.mjs             # LT1 / LT2 demo sessions, backup, language
 node test/ui_verify.mjs            # verification card, multi-day curve, continuous test
+node test/ui_card.mjs              # verification card for recordings that run on after the stop: end-of-run field, uncertain → confirm, typed end, emptied fields, CSV line
 node test/ui_strap.mjs             # the Bluetooth path through the UI with a mock strap (double tap, pause, cue on another tab, reconnect, settings)
 node test/ui_data.mjs              # generated RR + Train.Red-style files: replay, SmO2 auto-attach + clock alignment, backup → delete all → restore (also during a session), stage edits
 node test/ui_sw.mjs                # service worker: install, offline start, update served like GitHub Pages, host error / slow host → cached app (own server)
