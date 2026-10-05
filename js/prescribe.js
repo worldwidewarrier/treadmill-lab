@@ -142,8 +142,8 @@ export function claudeSummary({ profile, zones, session, metrics, analysis, plan
     L.push(`Session: ${session.type}, ${new Date(session.startedAt).toLocaleString()}, ${Math.round((metrics?.durationSec || 0) / 60)} min, source ${session.sourceKind}`);
     if (metrics) L.push(`Metrics: mean HR ${Math.round(metrics.meanHr)}, max HR ${metrics.maxHr}, mean α1 ${Number.isFinite(metrics.meanAlpha1) ? metrics.meanAlpha1.toFixed(2) : 'n/a'}, min α1 ${Number.isFinite(metrics.minAlpha1) ? metrics.minAlpha1.toFixed(2) : 'n/a'}, α1≥0.75 ${Number.isFinite(metrics.pctAlphaAbove75) ? Math.round(metrics.pctAlphaAbove75) + '%' : 'n/a'}, HR drift ${Number.isFinite(metrics.driftPct) ? metrics.driftPct.toFixed(1) + '%' : 'n/a'}, artifacts ${Number.isFinite(metrics.artifactPct) ? metrics.artifactPct.toFixed(1) + '%' : 'n/a'}, time in zone ${Number.isFinite(metrics.timeInZonePct) ? Math.round(metrics.timeInZonePct) + '%' : 'n/a'}`);
     if (session.type !== 'test') {
-      const c = lactateChecks(session); const v = lactateVerdict(session); const ew = endWindowStats(session, 300);
-      L.push(`Constant load: speed ${session.speed ?? '?'} km/h, incline ${session.incline ?? '?'} %; last-5-min HR ${Number.isFinite(ew.hr) ? Math.round(ew.hr) : 'n/a'}, α1 ${Number.isFinite(ew.alpha1) ? ew.alpha1.toFixed(2) : 'n/a'}; lactate rest ${c.rest ?? 'n/a'}, 10-min ${c.mid ?? 'n/a'}, end ${c.end ?? 'n/a'}${v ? `; verdict: ${v.en}` : ''}`);
+      const c = lactateChecks(session); const v = lactateVerdict(session); const ew = endWindowStats(session, 300); const px = endOnlyProxy(session);
+      L.push(`Constant load (${session.purpose || 'auto'}): speed ${session.speed ?? '?'} km/h, incline ${session.incline ?? '?'} %; duration ${px.durMin.toFixed(1)} min; HR drift min 8-13 → last 5 ${Number.isFinite(px.driftBpm) ? (px.driftBpm >= 0 ? '+' : '') + px.driftBpm.toFixed(1) + ' bpm' : 'n/a'}; RPE end ${px.rpeEnd ?? 'n/a'}; last-5-min HR ${Number.isFinite(ew.hr) ? Math.round(ew.hr) : 'n/a'}, α1 ${Number.isFinite(ew.alpha1) ? ew.alpha1.toFixed(2) : 'n/a'}; lactate rest ${c.rest ?? 'n/a'}, 10-min ${c.mid ?? 'n/a'}, end ${c.end ?? 'n/a'}${v ? `; verdict: ${v.en}` : ''}`);
       const ss = smo2Steady(session);
       if (ss) L.push(`SmO2 (constant load): 5-10 min ${Number.isFinite(ss.earlyMean) ? ss.earlyMean.toFixed(1) : 'n/a'} %, last 5 min ${Number.isFinite(ss.endMean) ? ss.endMean.toFixed(1) : 'n/a'} % (drift ${Number.isFinite(ss.drift) ? (ss.drift > 0 ? '+' : '') + ss.drift.toFixed(1) : 'n/a'}), min ${Number.isFinite(ss.min) ? ss.min.toFixed(1) : 'n/a'} %, end slope ${Number.isFinite(ss.slopeEnd) ? ss.slopeEnd.toFixed(2) : 'n/a'} %/min → ${ss.steady == null ? 'n/a' : ss.steady ? 'steady' : 'NOT steady'}; THb mean ${Number.isFinite(ss.thbMean) ? ss.thbMean.toFixed(1) : 'n/a'} (contact ${ss.contact ?? 'n/a'}); coverage ${Math.round(ss.coverageSec / 60)} min; offset ${Math.round((session.smo2.offsetMs || 0) / 1000)} s${session.smo2.alignment ? ` (${session.smo2.alignment.method === 'manual' ? 'manual' : session.smo2.alignment.ok ? `HR-verified, ${session.smo2.alignment.mad.toFixed(2)} bpm` : `UNVERIFIED, HR mismatch ${session.smo2.alignment.mad.toFixed(1)} bpm`})` : ' (clock only)'}`);
     }
@@ -180,6 +180,15 @@ export function endWindowStats(session, sec = 300) {
   const a1 = (session.features || []).filter(f => f.t >= t1 - sec * 1000 && Number.isFinite(f.alpha1) && !f.paused).map(f => f.alpha1);
   return { hr: mean(hr), alpha1: mean(a1) };
 }
+/** Proxies for an end-only MLSS call: duration, HR drift (min 8–13 → last 5 min), SmO2 steadiness, last RPE. */
+export function endOnlyProxy(session) {
+  const t0 = session.startedAt, t1 = session.endedAt || t0; const durMin = (t1 - t0 - (session.pauseMs || 0)) / 60000;
+  const hrs = (session.hrLive || []).filter(p => p[1] > 0);
+  const early = hrs.filter(p => p[0] >= t0 + 480000 && p[0] < t0 + 780000).map(p => p[1]); const late = hrs.filter(p => p[0] >= t1 - 300000).map(p => p[1]);
+  const driftBpm = early.length >= 10 && late.length >= 10 ? mean(late) - mean(early) : NaN;
+  const ss = smo2Steady(session); const rpe = (session.events || []).filter(e => e.type === 'rpe' && Number.isFinite(e.value)); const rpeEnd = rpe.length ? rpe[rpe.length - 1].value : null;
+  return { durMin, driftBpm, smo2Steady: ss ? ss.steady : null, rpeEnd };
+}
 /**
  * Verdict for a constant-load session with end (and optional rest / 10-min) lactate.
  * LT1 runs: end ≤ 2.0 (and ≤ rest+1.0) → below LT1. LT2 runs (MLSS logic): Δ(mid→end) ≤ 1.0 → at/below MLSS.
@@ -189,14 +198,22 @@ export function lactateVerdict(session) {
   if (c.end == null) return null;
   const spTxt = Number.isFinite(sp) ? ` @ ${sp} km/h` : '';
   const rise = c.rest != null ? c.end - c.rest : null; const delta = c.mid != null ? c.end - c.mid : null;
-  if (type === 'lt2' || (type === 'free' && c.end >= 3)) {
+  const isMlss = session.purpose === 'mlss' || (session.purpose !== 'lt1' && (type === 'lt2' || (type === 'free' && c.end >= 3)));
+  if (isMlss) {
     if (delta != null) {
       if (delta <= 1.0 && c.end < 8) return { level: 'ok', adjust: { lt2Speed: +0.3 }, ko: `MLSS 이하 확인${spTxt}: 10분→종료 상승 ${delta.toFixed(1)} mmol/L (≤1.0). 다음 검증은 +0.3 km/h.`, en: `At/below MLSS${spTxt}: 10-min→end rise ${delta.toFixed(1)} mmol/L (≤1.0). Next verification +0.3 km/h.` };
       return { level: 'high', adjust: { lt2Speed: -0.4 }, ko: `MLSS 초과${spTxt}: 10분→종료 상승 ${delta.toFixed(1)} mmol/L (>1.0). LT2 속도를 0.3~0.5 km/h 낮추세요.`, en: `Above MLSS${spTxt}: rise ${delta.toFixed(1)} mmol/L (>1.0). Lower the LT2 speed by 0.3–0.5 km/h.` };
     }
     if (c.end >= 6) return { level: 'high', adjust: { lt2Speed: -0.4 }, ko: `종료 젖산 ${c.end} — LT2 위일 가능성${spTxt}. 10분 샘플을 추가하면 판정이 확실해집니다.`, en: `End lactate ${c.end} — likely above LT2${spTxt}. Add a 10-min sample next time for a firm call.` };
     if (c.end < 3) return { level: 'low', adjust: { lt2Speed: +0.3 }, ko: `종료 젖산 ${c.end} — LT2 아래${spTxt}. 다음엔 +0.3 km/h.`, en: `End lactate ${c.end} — below LT2${spTxt}. Try +0.3 km/h next time.` };
-    return { level: 'near', adjust: null, ko: `종료 젖산 ${c.end} — LT2 근처${spTxt}. 안정 상태 확인에는 10분 샘플이 필요합니다.`, en: `End lactate ${c.end} — near LT2${spTxt}. A 10-min sample is needed to confirm steady state.` };
+    // End-only MLSS proxy (solo use, no 10-min sample): must complete ≥ 25 min; HR drift (min 8–13 → last 5 min) ≤ 6 bpm and SmO2 steady → likely at/below MLSS; drift > 8 bpm, SmO2 still falling or RPE ≥ 18 → likely above.
+    const px = endOnlyProxy(session);
+    if (px.durMin < 25) return { level: 'near', adjust: null, ko: `종료 젖산 ${c.end} — ${Math.round(px.durMin)}분만 달려 MLSS 판정 보류${spTxt}. 30분을 채우거나(힘들어 중단했다면 MLSS 위) 10분 샘플을 추가하세요.`, en: `End lactate ${c.end} — only ${Math.round(px.durMin)} min, MLSS call withheld${spTxt}. Complete 30 min (if you stopped from fatigue, treat as above MLSS) or add a 10-min sample.` };
+    const dTxt = Number.isFinite(px.driftBpm) ? `${px.driftBpm >= 0 ? '+' : ''}${px.driftBpm.toFixed(0)} bpm` : 'n/a';
+    const bad = []; if (Number.isFinite(px.driftBpm) && px.driftBpm > 8) bad.push(`심박 드리프트 ${dTxt}|HR drift ${dTxt}`); if (px.smo2Steady === false) bad.push('SmO₂ 계속 하락|SmO2 still falling'); if (px.rpeEnd != null && px.rpeEnd >= 18) bad.push(`RPE ${px.rpeEnd}|RPE ${px.rpeEnd}`);
+    if (bad.length) return { level: 'high', adjust: { lt2Speed: -0.3 }, ko: `종료 젖산 ${c.end} + ${bad.map(b => b.split('|')[0]).join(', ')} — MLSS 초과 가능성(대리 지표)${spTxt}. 다음은 −0.3 km/h.`, en: `End lactate ${c.end} + ${bad.map(b => b.split('|')[1]).join(', ')} — likely above MLSS (proxy)${spTxt}. Next −0.3 km/h.` };
+    if (Number.isFinite(px.driftBpm) && px.driftBpm <= 6) return { level: 'ok', adjust: { lt2Speed: +0.3 }, ko: `종료 젖산 ${c.end}, 심박 드리프트 ${dTxt} (10→30분)${px.smo2Steady ? ', SmO₂ 안정' : ''} — MLSS 이하 가능성 높음(대리 지표)${spTxt}. 다음은 +0.3 km/h. 확정하려면 10분 샘플 또는 같은 속도 10분 단독 런.`, en: `End lactate ${c.end}, HR drift ${dTxt} (10→30 min)${px.smo2Steady ? ', SmO2 steady' : ''} — likely at/below MLSS (proxy)${spTxt}. Next +0.3 km/h; to confirm, add a 10-min sample or a separate 10-min run at this speed.` };
+    return { level: 'near', adjust: null, ko: `종료 젖산 ${c.end}, 심박 드리프트 ${dTxt} — MLSS 경계${spTxt}. 같은 속도로 재검하거나 10분 샘플을 추가하세요.`, en: `End lactate ${c.end}, HR drift ${dTxt} — borderline MLSS${spTxt}. Repeat at this speed or add a 10-min sample.` };
   }
   // LT1 / easy runs
   const tooHigh = c.end > 2.5 || (rise != null && rise > 1.5);
