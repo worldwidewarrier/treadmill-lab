@@ -1,5 +1,5 @@
 // Treadmill Lab — app shell, views and wiring.
-import { t, tx, setLang, S } from './i18n.js';
+import { t, tx, setLang, S, VOICE } from './i18n.js';
 import { store, uid } from './store.js';
 import { Alerts } from './alerts.js';
 import { HeartRateSource } from './ble.js';
@@ -11,7 +11,7 @@ import { importFile } from './importers.js';
 import { liveChart, timelineChart, stepTestChart, trendChart } from './charts.js';
 
 // ---------- defaults ----------
-export const APP_VERSION = '1.1.7'; // keep in sync with sw.js VERSION
+export const APP_VERSION = '1.1.8'; // keep in sync with sw.js VERSION
 const DEFAULTS = {
   profile: { birth: '1997-07-21', restHr: 52, maxHr: 188, maxHrMode: 'tanaka', lang: 'both', theme: 'system' },
   treadmill: { model: 'LTSXL', minSpeed: 0.8, maxSpeed: 18, speedStep: 0.1, maxIncline: 15, inclineStep: 0.5 },
@@ -123,7 +123,7 @@ function renderLive() {
         <div class="grid2" style="margin-top:8px"><label class="field">${t('warmup')} (min)<input type="number" id="lt2-wu" value="${st.warmupSec / 60}" min="0" max="30"></label><label class="field">쿨다운 / cool-down (min)<input type="number" id="lt2-cd" value="${st.cooldownSec / 60}" min="0" max="30"></label></div>
         <div class="grid2" style="margin-top:8px"><label class="field">인터벌 속도 km/h<input type="number" id="sess-speed" step="0.1" value="${L.speed ?? (T && Number.isFinite(T.speedHi) ? T.speedHi : '')}"></label><label class="field">경사 %<input type="number" id="sess-incline" step="0.5" value="${L.incline ?? A.settings.protocol.incline}"></label></div>
         <p class="small muted">MLSS 검증: 1회 반복을 30분으로 두고 10분·30분에 젖산을 찍으면 상승폭(≤1.0)으로 LT2를 확인합니다. <span class="en">MLSS check: use one 30-min rep with lactate at 10 and 30 min; a rise ≤1.0 mmol/L confirms LT2.</span></p></div>`;
-    } else html += `<div class="card" style="margin-top:10px"><p class="muted">심박·α1만 모니터링합니다. 랩 버튼으로 구간을 표시할 수 있습니다.<span class="en">Monitors HR and α1 only; use Lap to mark segments.</span></p><div class="grid2"><label class="field">러닝머신 km/h<input type="number" id="sess-speed" step="0.1" value="${L.speed ?? ''}"></label><label class="field">경사 %<input type="number" id="sess-incline" step="0.5" value="${L.incline ?? A.settings.protocol.incline}"></label></div></div>`;
+    } else html += `<div class="card" style="margin-top:10px"><p class="muted">심박·α1만 모니터링합니다. 랩 버튼으로 구간을 표시할 수 있습니다.<span class="en">Monitors HR and α1 only; use Lap to mark segments.</span></p><div class="grid2"><label class="field">러닝머신 km/h<input type="number" id="sess-speed" step="0.1" value="${L.speed ?? ''}"></label><label class="field">경사 %<input type="number" id="sess-incline" step="0.5" value="${L.incline ?? A.settings.protocol.incline}"></label></div><label class="field" style="margin-top:8px">채혈 알림 (분, 쉼표 구분 · 30초 전 예고 + 정각 음성) <span class="en">Lactate cue minutes (comma-separated; 30-s warning + voice on the minute)</span><input type="text" id="free-cues" inputmode="numeric" placeholder="예: 10,30" value="${esc(L.cuesText ?? '10,30')}"></label><p class="small muted">MLSS 검증: 10,30 · LT1 검증 35분: 35 · 비우면 알림 없음 <span class="en">MLSS check: 10,30 · 35-min LT1 check: 35 · empty = no cues</span></p></div>`;
     // source
     html += `<h2>센서 <span class="en">Sensor</span></h2><div class="segment" id="src-seg"><button class="${L.sourceKind === 'ble' ? 'active' : ''}" data-src="ble" ${bleOk ? '' : 'disabled'}>${t('source_ble')}</button><button class="${L.sourceKind === 'demo' ? 'active' : ''}" data-src="demo">${t('source_demo')}</button><button class="${L.sourceKind === 'replay' ? 'active' : ''}" data-src="replay">${t('source_replay')}</button></div>`;
     html += `<p class="small" id="ble-diag" style="margin-top:6px"></p>`;
@@ -160,6 +160,7 @@ function mountLive() {
   const rs = $('#replay-speed'); if (rs) rs.onchange = () => { A.live.replaySpeed = +rs.value; };
   const lm = $('#lt1-min'); if (lm) lm.onchange = () => { A.live.minutes = +lm.value; };
   const sp = $('#sess-speed'); if (sp) sp.onchange = () => { A.live.speed = sp.value === '' ? null : +sp.value; };
+  const cu = $('#free-cues'); if (cu) cu.onchange = () => { A.live.cuesText = cu.value; };
   const si = $('#sess-incline'); if (si) si.onchange = () => { A.live.incline = si.value === '' ? null : +si.value; };
   for (const [id, key, mul] of [['lt2-reps', 'reps', 1], ['lt2-work', 'workSec', 60], ['lt2-rest', 'restSec', 60], ['lt2-wu', 'warmupSec', 60], ['lt2-cd', 'cooldownSec', 60]]) { const el = document.getElementById(id); if (el) el.onchange = () => { A.live.lt2[key] = +el.value * mul; }; }
 }
@@ -168,6 +169,7 @@ function updateLive(v) {
   updateConnChip(v);
   if (A.view !== 'live') return;
   if (v.state !== 'running') { const h = $('#pre-hr'); if (h) { h.textContent = v.hr ?? '–'; $('#pre-rr').textContent = v.samples; $('#pre-status').textContent = v.source.status; if (A.source?.battery != null) $('#pre-batt').textContent = A.source.battery + '%'; } if (v.source.status === 'connected' && $('[data-action=start]')?.disabled) render(); return; }
+  if (v.mode === 'free' && A.live.cueSecs?.length && !v.paused) { for (const c of A.live.cueSecs) { const kW = c + ':w', kC = c + ':c'; if (v.elapsedSec >= c - 30 && v.elapsedSec < c && !A.live.cueFired.has(kW)) { A.live.cueFired.add(kW); A.alerts?.speak(VOICE.stage_warn(30), { key: 'cue-w' }); } if (v.elapsedSec >= c && !A.live.cueFired.has(kC)) { A.live.cueFired.add(kC); A.live.cueFired.add(kW); A.alerts?.cue(VOICE.free_cue(Math.round(c / 60)), { beep: 'triple', vib: [300, 100, 300, 100, 300] }); toast(`채혈 시간 / lactate sample now (${Math.round(c / 60)} min)`, 8000); } } }
   if (!$('#lv-hr')) return;
   $('#lv-hr').textContent = v.hr ?? '–'; $('#lv-contact').textContent = v.contact === false ? '⚠ 접촉 없음' : '';
   const f = v.feature; const box = $('#lv-a1-box');
@@ -265,6 +267,8 @@ async function startSession() {
   const spEl = $('#sess-speed'), siEl = $('#sess-incline'); if (spEl) L.speed = spEl.value === '' ? null : +spEl.value; if (siEl) L.incline = siEl.value === '' ? null : +siEl.value;
   eng.configure({ mode: L.mode, protocol: A.settings.protocol, intervals: L.mode === 'lt2' ? L.lt2 : null, targets, meta: L.mode === 'test' ? null : { speed: L.speed ?? null, incline: L.incline ?? A.settings.protocol.incline } });
   if (A.source.kind === 'demo') A.source.profile = demoProfileForEngine(eng);
+  const cuEl = $('#free-cues'); if (cuEl) L.cuesText = cuEl.value;
+  L.cueSecs = L.mode === 'free' ? String(L.cuesText ?? '').split(/[,\s]+/).map(x => parseFloat(x)).filter(x => Number.isFinite(x) && x > 0).map(x => Math.round(x * 60)) : []; L.cueFired = new Set();
   liveStageSig = ''; eng.start();
   const ok = await A.alerts.keepAwake(true); if (!ok) toast(tx('keep_awake_fail'), 4000);
   render();

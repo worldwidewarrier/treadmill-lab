@@ -60,6 +60,7 @@ export const VOICE = {
   stage_start: (n, speed, incline) => `${n}단계. 시속 ${speed} 킬로미터${incline ? `, 경사 ${incline}퍼센트` : ''}.`,
   stage_warn: (sec) => `${sec}초 후 채혈 정지.`,
   stage_end: () => '정지. 채혈하세요.',
+  free_cue: (min) => `${min}분 경과. 벨트를 멈추고 채혈하세요.`,
   pause_warn: (sec) => `${sec}초 후 다음 단계.`,
   resume: (n, speed) => `${n}단계 시작. 시속 ${speed} 킬로미터.`,
   zone_high: () => '심박 높음. 속도를 줄이세요.',
