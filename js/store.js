@@ -19,7 +19,8 @@ function tx(store, mode, fn) {
   return open().then(db => new Promise((resolve, reject) => {
     const t = db.transaction(store, mode); const s = t.objectStore(store); let out;
     try { out = fn(s); } catch (e) { reject(e); return; }
-    t.oncomplete = () => resolve(out && out.result !== undefined ? out.result : out); t.onerror = () => reject(t.error); t.onabort = () => reject(t.error);
+    // A request's result — also when it is undefined (get() of a key that does not exist used to hand back the request object itself).
+    t.oncomplete = () => resolve(typeof IDBRequest !== 'undefined' && out instanceof IDBRequest ? out.result : out); t.onerror = () => reject(t.error); t.onabort = () => reject(t.error);
   }));
 }
 export const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);

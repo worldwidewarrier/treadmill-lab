@@ -21,6 +21,11 @@ check('LT2 Δ 0.6 → ok (+0.3)', (() => { const v = lactateVerdict(mk('lt2', 12
 check('LT2 Δ 1.8 → high (−0.4)', (() => { const v = lactateVerdict(mk('lt2', 12.5, { mid: 3.8, end: 5.6 })); return v.level === 'high' && v.adjust.lt2Speed === -0.4; })());
 check('LT2 end-only 6.5 → high', lactateVerdict(mk('lt2', 13, { end: 6.5 })).level === 'high');
 check('no end sample → null', lactateVerdict(mk('lt1', 9, { rest: 1.0 })) === null);
+{ // the app was closed without Finish: the autosaved copy has no end time — its end is the last heart beat
+  const u = mk('free', 10.5, { mid: 3.4, end: 3.9 }); u.endedAt = null; u.final = false; const cu = lactateChecks(u);
+  check('unfinished recording: the 10-min sample is not taken for the end sample', cu.mid === 3.4 && cu.end === 3.9, JSON.stringify(cu));
+  check('unfinished recording without heart rate: no crash', lactateChecks({ type: 'free', startedAt: now, endedAt: null, hrLive: [], events: [{ t: now + 1000, type: 'lactate', value: 1.2 }] }).rest === 1.2);
+}
 // multi-day curve
 const sessions = [mk('lt1', 8, { end: 1.1, hr: 128, daysAgo: 9 }), mk('lt1', 9, { end: 1.3, hr: 137, daysAgo: 7 }), mk('lt1', 10, { end: 1.8, hr: 146, daysAgo: 5 }), mk('lt2', 11, { end: 2.7, hr: 154, daysAgo: 3 }), mk('lt2', 12, { end: 4.2, hr: 162, daysAgo: 1 }), mk('lt2', 12, { end: 4.6, hr: 163, daysAgo: 10 }), mk('test', 7, { end: 1 })];
 const md = multiDayCurve(sessions);

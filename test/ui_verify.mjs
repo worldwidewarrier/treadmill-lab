@@ -1,11 +1,13 @@
 // Headless: LT1 demo session with speed + end lactate via the live button → verdict card; seed 3 verification sessions → multi-day curve → apply.
 import { chromium } from '/opt/npm-tools/node_modules/playwright/index.mjs';
+import { mkdirSync } from 'node:fs'; import { tmpdir } from 'node:os';
+const SHOTS = process.env.TL_SHOTS || `${tmpdir()}/treadmill-lab-shots`; mkdirSync(SHOTS, { recursive: true }); // screenshots
 const base = 'http://127.0.0.1:8765/';
 const browser = await chromium.launch();
 const ctx = await browser.newContext({ viewport: { width: 384, height: 604 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, colorScheme: 'dark', locale: 'ko-KR', timezoneId: 'Asia/Seoul' });
 const page = await ctx.newPage(); const errors = []; page.on('pageerror', e => errors.push(e.message)); page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
 let fails = 0; const check = (n, c, d = '') => { console.log((c ? 'PASS ' : 'FAIL ') + n + (d ? '  ' + d : '')); if (!c) fails++; };
-const shot = (n) => page.screenshot({ path: `/tmp/claude-0/-home-claude/b7afc582-3385-59f9-b17f-772b43d6baaf/scratchpad/shots/${n}.png`, fullPage: true });
+const shot = (n) => page.screenshot({ path: `${SHOTS}/${n}.png`, fullPage: true });
 await page.goto(base, { waitUntil: 'networkidle' }); await page.waitForSelector('#view .card');
 await page.evaluate(async () => { TL.settings.zones = { lt1Hr: 146, lt2Hr: 167, lt1Speed: 9.9, lt2Speed: 12.0, source: 'seed', grade: 'B/B', updatedAt: Date.now() - 3 * 86400000 }; await TL.saveSettings(); });
 await page.reload({ waitUntil: 'networkidle' }); await page.waitForSelector('#view .card');
@@ -26,10 +28,11 @@ await page.fill('#vc-end', '3.0'); await page.$eval('#vc-end', el => el.dispatch
 const before = await page.evaluate(() => TL.settings.zones.lt1Hr); await page.click('[data-action=apply-verdict]'); await page.waitForTimeout(400);
 const after = await page.evaluate(() => ({ hr: TL.settings.zones.lt1Hr, sp: TL.settings.zones.lt1Speed })); check('apply verdict caps LT1 below the failed 9.5 km/h run (HR < before, speed ≤ 9.0)', after.hr < before && after.sp <= 9.0, `${before} → ${after.hr} bpm, ${after.sp} km/h`);
 // seed 3 more verification sessions at other speeds → multi-day curve
-await page.evaluate(async () => { const { store } = await import('./js/store.js'); const now = Date.now(); const mk = (speed, end, hr, d) => { const t0 = now - d * 86400000; const hrLive = []; for (let i = 0; i < 1500; i++) hrLive.push([t0 + i * 1000, hr]); return { id: 'seed' + speed, type: 'lt1', final: true, startedAt: t0, endedAt: t0 + 1500000, speed, incline: 1, hrLive, features: [], events: [{ t: t0 + 1450000, type: 'lactate', value: end }], metrics: { durationSec: 1500, meanHr: hr } }; }; await store.putSession(mk(8, 1.1, 128, 6)); await store.putSession(mk(10.5, 2.2, 150, 4)); await store.putSession(mk(11.5, 3.6, 158, 2)); await store.putSession(mk(12.5, 5.4, 165, 1)); });
+await page.evaluate(async () => { const { store } = await import('./js/store.js'); const now = Date.now(); const mk = (speed, end, hr, d) => { const t0 = now - d * 86400000; const hrLive = []; for (let i = 0; i < 1500; i++) hrLive.push([t0 + i * 1000, hr]); return { id: 'seed' + speed, type: 'lt1', final: true, startedAt: t0, endedAt: t0 + 1500000, speed, incline: 1, hrLive, features: [], events: [{ t: t0 + 1450000, type: 'lactate', value: end }], metrics: { durationSec: 1500, meanHr: hr } }; }; await store.putSession(mk(8, 1.1, 128, 6)); await store.putSession(mk(9, 1.4, 138, 5)); await store.putSession(mk(10.5, 2.2, 150, 4)); await store.putSession(mk(11.5, 3.6, 158, 2)); await store.putSession(mk(12.5, 5.4, 165, 1)); });
 await page.click('#nav button[data-view=home]'); await page.waitForTimeout(200); await page.click('#nav button[data-view=analysis]'); await page.waitForSelector('[data-action=apply-multiday]', { timeout: 8000 });
-const md = await page.evaluate(() => ({ n: TL.multiDay.points.length, lt1: TL.multiDay.analysis.lt1Primary.x, lt2: TL.multiDay.analysis.lt2Primary.x, grade: TL.multiDay.grade }));
+const md = await page.evaluate(() => ({ n: TL.multiDay.points.length, speeds: TL.multiDay.points.map(p => p.x), lt1: TL.multiDay.analysis.lt1Primary.x, lt2: TL.multiDay.analysis.lt2Primary.x, grade: TL.multiDay.grade }));
 check('multi-day curve from 5 speeds', md.n === 5 && md.lt1 > 8 && md.lt2 > md.lt1, JSON.stringify(md));
+check('the demo (virtual strap) run at 9.5 km/h is not a curve point', !md.speeds.includes(9.5), JSON.stringify(md.speeds));
 await shot('31-multiday');
 await page.click('[data-action=apply-multiday]'); await page.waitForTimeout(400);
 const z = await page.evaluate(() => TL.settings.zones); check('multi-day thresholds applied', z.source === 'multi-day lactate' && Number.isFinite(z.lt1Hr) && Number.isFinite(z.lt2Hr), JSON.stringify(z));

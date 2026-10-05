@@ -83,13 +83,14 @@ export function sessionMetrics(session) {
   const art = feats.length ? mean(feats.map(f => f.artifactPct)) : NaN;
   const endT = session.endedAt || (hrs.length ? hrs[hrs.length - 1][0] : (feats.length ? feats[feats.length - 1].t : null));
   const dur = endT && session.startedAt ? Math.max(0, (endT - session.startedAt - (session.pauseMs || 0)) / 1000) : 0;
-  const tiz = session.tiz && session.tiz.totalSec ? 100 * session.tiz.inSec / session.tiz.totalSec : NaN;
-  return { durationSec: dur, meanHr: n ? mean(hrs.map(p => p[1])) : NaN, maxHr: n ? Math.max(...hrs.map(p => p[1])) : NaN, meanAlpha1: mean(a1), pctAlphaAbove75: a1.length ? 100 * a1.filter(v => v >= 0.75).length / a1.length : NaN, minAlpha1: a1.length ? Math.min(...a1) : NaN, driftPct: Number.isFinite(hr1) && hr1 ? 100 * (hr3 / hr1 - 1) : NaN, artifactPct: art, timeInZonePct: tiz, rrCount: (session.rr || []).length };
+  const tz = session.tiz; const tiz = tz && typeof tz.inSec === 'number' && typeof tz.totalSec === 'number' && tz.totalSec > 0 ? 100 * tz.inSec / tz.totalSec : NaN; // strings = a session recorded while the update interval was stored as text
+  let maxHr = -Infinity; for (const p of hrs) if (p[1] > maxHr) maxHr = p[1];
+  return { durationSec: dur, meanHr: n ? mean(hrs.map(p => p[1])) : NaN, maxHr: n ? maxHr : NaN, meanAlpha1: mean(a1), pctAlphaAbove75: a1.length ? 100 * a1.filter(v => v >= 0.75).length / a1.length : NaN, minAlpha1: a1.length ? Math.min(...a1) : NaN, driftPct: Number.isFinite(hr1) && hr1 ? 100 * (hr3 / hr1 - 1) : NaN, artifactPct: art, timeInZonePct: tiz, rrCount: (session.rr || []).length };
 }
 
 /** Auto-adjustment rules from recent LT1 sessions (last 14 days) and test age. */
 export function assessRecent(sessions, zones, lastTestAt) {
-  const now = Date.now(); const recent = sessions.filter(s => s.type === 'lt1' && s.final && now - s.startedAt < 14 * 86400000);
+  const now = Date.now(); const recent = sessions.filter(s => s.type === 'lt1' && s.final && s.sourceKind !== 'demo' && now - s.startedAt < 14 * 86400000); // practice runs on the virtual strap never adjust real targets
   const notes = []; let lt1Adjust = 0; let holdDuration = false;
   const m = recent.map(sessionMetrics).filter(x => Number.isFinite(x.meanAlpha1));
   if (m.length >= 2) {
@@ -149,7 +150,8 @@ export function claudeSummary({ profile, zones, session, metrics, analysis, plan
     }
     if (session.stages?.length) { L.push('Stages (speed km/h | incline % | HR | α1 | lactate | RPE | SmO2):'); for (const r of (analysis?.rows || session.stages)) L.push(`  ${r.speed} | ${r.incline} | ${Number.isFinite(r.hr) ? Math.round(r.hr) : '-'} | ${Number.isFinite(r.alpha1) ? r.alpha1.toFixed(2) : '-'} | ${r.lactate ?? '-'} | ${r.rpe ?? '-'} | ${Number.isFinite(r.smo2) ? r.smo2.toFixed(1) : '-'}`); }
     if (analysis?.lactate) { L.push('Lactate methods: ' + [...analysis.lactate.lt1, ...analysis.lactate.lt2].map(m => `${m.method}=${Number.isFinite(m.x) ? m.x.toFixed(2) + 'km/h/' + Math.round(m.hr) + 'bpm' : 'n/a'}`).join(', ')); }
-    if (analysis?.hrv) L.push(`HRVT: HRVT1 ${analysis.hrv.hrvt1 ? Math.round(analysis.hrv.hrvt1.hr) + ' bpm @ ' + analysis.hrv.hrvt1.speed.toFixed(1) : 'n/a'}; HRVT2 ${analysis.hrv.hrvt2 ? Math.round(analysis.hrv.hrvt2.hr) + ' bpm @ ' + analysis.hrv.hrvt2.speed.toFixed(1) : 'n/a'}${analysis.hrv.note ? ' (' + analysis.hrv.note + ')' : ''}${analysis.hrv.plateau ? ' [' + analysis.hrv.plateau.note + ']' : ''}`);
+    const kmh = v => Number.isFinite(v) ? v.toFixed(1) : '? km/h';
+    if (analysis?.hrv) L.push(`HRVT: HRVT1 ${analysis.hrv.hrvt1 ? Math.round(analysis.hrv.hrvt1.hr) + ' bpm @ ' + kmh(analysis.hrv.hrvt1.speed) : 'n/a'}; HRVT2 ${analysis.hrv.hrvt2 ? Math.round(analysis.hrv.hrvt2.hr) + ' bpm @ ' + kmh(analysis.hrv.hrvt2.speed) : 'n/a'}${analysis.hrv.note ? ' (' + analysis.hrv.note + ')' : ''}${analysis.hrv.plateau ? ' [' + analysis.hrv.plateau.note + ']' : ''}`);
     if (analysis?.smo2) L.push(`SmO2 breakpoints: BP1 ${analysis.smo2.bp1 ? analysis.smo2.bp1.speed.toFixed(1) + ' km/h' : 'n/a'}, BP2 ${analysis.smo2.bp2 ? analysis.smo2.bp2.speed.toFixed(1) + ' km/h' : 'n/a'}${analysis.smo2.note ? ' (' + analysis.smo2.note + ')' : ''}`);
     if (analysis?.tri) L.push(`Triangulation: LT1 ${analysis.tri.lt1 ? Math.round(analysis.tri.lt1.hr) + ' bpm (' + analysis.tri.lt1.source + ', grade ' + analysis.tri.grade1 + ')' : 'n/a'}; LT2 ${analysis.tri.lt2 ? Math.round(analysis.tri.lt2.hr) + ' bpm (' + analysis.tri.lt2.source + ', grade ' + analysis.tri.grade2 + ')' : 'n/a'}`);
   }
@@ -163,7 +165,7 @@ export function claudeSummary({ profile, zones, session, metrics, analysis, plan
 /** Derive {rest, mid, end} lactate from logged events by timing; explicit session.lactateChecks wins. */
 export function lactateChecks(session) {
   const out = { rest: null, mid: null, end: null, ...(session.lactateChecks || {}) };
-  const t0 = session.startedAt, t1 = session.endedAt || t0; const dur = (t1 - t0) / 1000;
+  const hl = session.hrLive; const t0 = session.startedAt, t1 = session.endedAt || (hl && hl.length ? hl[hl.length - 1][0] : t0); const dur = (t1 - t0) / 1000; // an unfinished (autosaved) session ends with its last heart beat — with dur = 0 every sample after minute 4 was filed as "end"
   for (const e of session.events || []) {
     if (e.type !== 'lactate' || !Number.isFinite(e.value)) continue;
     const rel = (e.t - t0) / 1000;
@@ -248,11 +250,11 @@ export function verdictZoneChange(zones, session, vd = lactateVerdict(session)) 
   const txt = keys.map(fmt).join(', ');
   return { zones: out, keys, ko: txt, en: txt };
 }
-/** Multi-day lactate curve: constant-speed sessions (last `days`) with an end sample → lactate vs speed (+ end-HR). */
+/** Multi-day lactate curve: constant-speed sessions (last `days`, demo sessions excluded) with an end sample → lactate vs speed (+ end-HR). */
 export function multiDayCurve(sessions, { days = 60, incline = null } = {}) {
   const now = Date.now(); const pts = [];
   for (const s of sessions) {
-    if (s.type === 'test' || !s.final || !Number.isFinite(s.speed)) continue;
+    if (s.type === 'test' || !s.final || !Number.isFinite(s.speed) || s.sourceKind === 'demo') continue; // demo (virtual strap) sessions are practice, not data
     if (now - s.startedAt > days * 86400000) continue;
     if (incline != null && Number.isFinite(s.incline) && Math.abs(s.incline - incline) > 0.6) continue;
     const c = lactateChecks(s); if (c.end == null) continue;

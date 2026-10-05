@@ -64,6 +64,9 @@ H10은 블루투스 2개 + ANT+를 동시에 지원하므로 이 앱(RR) + Train
 - **삼각측량**: 젖산 = 기준. 차이 ≤5 bpm 일치 / 5–10 주의 / >10 불일치. 등급 A(젖산 + 6단계↑ + 일치 1↑, 불일치 0) / B / C.
 - **SmO2 시간 정렬**: Train.Red/가민 파일에 심박이 있으면 세션의 H10 심박과 교차상관(±180 s, 1 s 간격)으로 시계 오차를 추정해 자동 보정하고(평균 오차 < 2.5 bpm일 때), 세션 상세·요약에 '심박 교차검증 ✓'로 표시합니다. 심박이 없는 파일은 시작 시각 기준 정렬 + 수동 보정.
 - **심박 드리프트**: 마지막 1/3 vs 첫 1/3 (15분 이상 세션은 처음 5분 램프업 제외).
+- **일시정지**: 단계·인터벌·경과 시계가 멈추고, 재개하면 남은 시간이 그대로 이어집니다(기록은 계속되고 그 구간의 α1 행은 '일시정지'로 표시). 일시정지 중에 「단계 종료」나 「종료」를 누르면 그 단계는 일시정지를 누른 시점에 끝난 것으로 기록됩니다. 단계 표의 '마지막 60초'는 아직 벽시계 기준이라, 단계 끝 60초 안에 일시정지가 있으면 그 단계 값은 참고만 하세요.
+- **스트랩 무신호**: 5초 넘게 심박 알림이 없으면(범위 이탈·재연결 중) 그 구간의 행은 시간축만 남기고 심박·α1을 비웁니다(마지막 값을 되풀이해 적지 않음). 존 체류 시간도 세지 않습니다.
+- **검증 카드의 '마지막 5분'은 기록의 끝 기준입니다(알려진 한계).** 벨트를 멈춘 뒤 채혈·입력하는 동안에도 기록이 이어지므로, 「종료」를 늦게 누를수록 마지막 5분 심박은 낮게, 10→30분 드리프트는 작게, SmO2 끝 기울기는 높게 나와 MLSS 대리 판정이 '이하' 쪽으로 기웁니다. 고칠 때까지: 젖산 값을 입력하면 바로 「종료」를 누르고(걷기는 종료 후에), 정지 후 1분 넘게 기록이 이어진 런은 카드의 심박·드리프트와 「존에 반영」의 심박 값을 그대로 믿지 마세요(젖산 값 자체와 속도 판정은 영향 없음). 개선 작업은 `wip/verification-card` 브랜치에 있습니다(HANDOFF §2c).
 - **처방**: 3존·5존, LT1 세션 = LT1 −10~−3 bpm(α1 ≥0.75 유지), LT2 세션 = LT2 ±3, 주 1회 LT2(4×8 → 4×10 → 5×10 → 회복 → 3×15 → 2×20 → 템포 30 → 회복), 긴 LT1 매주 +10분, 자동 조정(α1 <0.70 → −3 bpm 등), 8주 또는 드리프트 시 재검사.
 
 ## 5. 개발 · Development
@@ -75,11 +78,22 @@ node test/test_lactate.mjs         # lactate methods vs numpy reference
 node test/test_analysis.mjs        # HRVT / SmO2 / triangulation on a synthetic step test
 node test/test_prescribe.mjs       # zones, weekly plan, insights
 node test/test_session.mjs         # full synthetic step test through the engine (×120)
-TZ=Asia/Seoul node test/test_importers.mjs   # Train.Red CSV/FIT, FatMaxxer, Garmin FIT (python3 test/make_fit.py first)
+node test/test_engine.mjs          # engine on a hand-driven clock: pause (clocks, stage end), numeric settings, silent strap, nothing carried into the next session
+node test/test_ble.mjs             # Bluetooth source against a mock strap: flaky reconnects, stuck GATT calls, failed / cancelled first connection, two sources on one strap (≈45 s)
+node test/test_alerts.mjs          # screen wake lock: one lock, the last of several quick on/off requests wins
+node test/test_verify.mjs          # lactate verification verdicts, zone updates, multi-day curve
+TZ=Asia/Seoul node test/test_importers.mjs   # Garmin FIT + RR text always; Train.Red / FatMaxxer parts when the private files are present
 node test/test_version.mjs         # APP_VERSION (app.js) == sw.js VERSION
 TZ=Asia/Seoul node test/test_align.mjs       # SmO2 clock-offset estimator (synthetic lags + real Train.Red file if present)
-node test/ui_smoke.mjs             # headless Chromium at 384×604 (needs playwright)
+node test/ui_smoke.mjs             # headless Chromium at 384×604 (needs playwright + the dev server on :8765)
+node test/ui_flows.mjs             # LT1 / LT2 demo sessions, backup, language
+node test/ui_verify.mjs            # verification card, multi-day curve, continuous test
+node test/ui_strap.mjs             # the Bluetooth path through the UI with a mock strap (double tap, pause, cue on another tab, reconnect, settings)
+node test/ui_data.mjs              # generated RR + Train.Red-style files: replay, SmO2 auto-attach + clock alignment, backup → delete all → restore (also during a session), stage edits
+node test/ui_sw.mjs                # service worker: install, offline start, update served like GitHub Pages, host error / slow host → cached app (own server)
 ```
+
+Tests that need the owner's private exports skip those parts when the files are absent (`test/data/README.md`). Screenshots go to `$TL_SHOTS` (default: a temp folder).
 
 Files: `js/dfa.js` (α1 engine), `js/lactate.js`, `js/analysis.js`, `js/prescribe.js`, `js/session.js` (test/LT1/LT2 engine), `js/ble.js`, `js/sources.js` (demo/replay), `js/importers.js` + `js/fit.js`, `js/store.js` (IndexedDB), `js/app.js` (UI), `sw.js` (offline).
 

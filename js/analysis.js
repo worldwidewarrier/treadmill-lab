@@ -58,7 +58,7 @@ function crossingDescending(rows, key, level) {
     if (!Number.isFinite(a[key]) || !Number.isFinite(b[key])) continue;
     if (a[key] >= level && b[key] < level) {
       const t = (a[key] - level) / (a[key] - b[key]);
-      return { speed: a.speed + t * (b.speed - a.speed), hr: a.hr + t * (b.hr - a.hr), how: 'interp' };
+      return { speed: Number.isFinite(a.speed) && Number.isFinite(b.speed) ? a.speed + t * (b.speed - a.speed) : NaN, hr: a.hr + t * (b.hr - a.hr), how: 'interp' }; // stages without a speed (imported laps): unknown, not 0 km/h
     }
   }
   return null;
@@ -80,7 +80,7 @@ export function hrvThresholds(rows, { artifactLimit = 5 } = {}) {
     if (Number.isFinite(fit.b) && fit.b < 0) {
       const hr = (level - fit.a) / fit.b;
       if (hr >= hrMin - 5 && hr <= hrMax + 8) {
-        const speed = interp(valid.map(r => r.hr), valid.map(r => r.speed), hr);
+        const speed = valid.every(r => Number.isFinite(r.speed)) ? interp(valid.map(r => r.hr), valid.map(r => r.speed), hr) : NaN;
         return { hr, speed, how: 'regression', r2: fit.r2 };
       }
     }

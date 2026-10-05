@@ -1,6 +1,6 @@
 // node test/test_dfa.mjs  — cross-validates js/dfa.js against test/ref_dfa.py and known values
 import { dfaAlpha, alpha1FatMaxxer, smoothnessPriors, FATMAXXER_SCALES, ArtifactFilter, Alpha1Window } from '../js/dfa.js';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -14,18 +14,19 @@ const selfTest = [635.0, 628.0, 627.0, 625.0, 624.0, 627.0, 624.0, 623.0, 633.0,
 const a = dfaAlpha(selfTest, FATMAXXER_SCALES);
 check('FatMaxxer self-test vector', Math.abs(a - 1.5503173309573208) < 1e-9, `got ${a}`);
 
-// 2) Load user's FatMaxxer RR file, build 120-s windows at several points, compare with Python reference
-const csv = readFileSync(join(here, 'data', 'fatmaxxer_rr_121156.csv'), 'utf8').split('\n').slice(2).filter(Boolean).map(l => l.split(',').map(Number));
+// 2) Windows from the owner's FatMaxxer RR file (private fixture, see test/data/README.md) + synthetic signals, compared with the Python reference
+const fixture = join(here, 'data', 'fatmaxxer_rr_121156.csv'); const haveFixture = existsSync(fixture);
+const csv = haveFixture ? readFileSync(fixture, 'utf8').split('\n').slice(2).filter(Boolean).map(l => l.split(',').map(Number)) : [];
 // csv rows: [timestamp(ms), rr, since_start]
 const windows = {};
 const starts = [200, 300, 500, 800, 1200, 1600, 2000, 2400];
-for (const idx of starts) {
+if (haveFixture) for (const idx of starts) {
   const tEnd = csv[idx][0];
   const w = csv.filter(r => r[0] > tEnd - 120000 && r[0] <= tEnd).map(r => r[1]);
   windows['w' + idx] = w;
 }
+else console.log('SKIP FatMaxxer-file windows (test/data/fatmaxxer_rr_121156.csv not present) — a synthetic RR series stands in');
 windows['raw:self'] = selfTest;
-windows['sp:w500'] = windows['w500'];
 // synthetic signals (deterministic LCG) — white noise, random walk
 function lcg(seed) { let s = seed >>> 0; return () => { s = (1664525 * s + 1013904223) >>> 0; return s / 4294967296; }; }
 const rnd = lcg(42);
@@ -33,6 +34,9 @@ function gauss() { let u = 0, v = 0; while (u === 0) u = rnd(); v = rnd(); retur
 const white = Array.from({ length: 150 }, () => 800 + 30 * gauss());
 let acc = 800; const brown = Array.from({ length: 150 }, () => (acc += 5 * gauss()));
 windows['raw:white'] = white; windows['raw:brown'] = brown;
+// a 2-min exercise-like RR series (≈150 bpm, correlated + white noise): exercises smoothness priors + DFA end to end without the private file
+let wk = 0; const synth = Array.from({ length: 300 }, () => { wk = 0.97 * wk + gauss(); return Math.round(400 + 3 * wk + 4 * gauss()); });
+windows['wSynth'] = synth; windows['sp:wSynth'] = synth; if (haveFixture) windows['sp:w500'] = windows['w500'];
 
 const py = spawnSync('python3', [join(here, 'ref_dfa.py')], { input: JSON.stringify(windows), encoding: 'utf8' });
 if (py.status !== 0) { console.error(py.stderr); process.exit(1); }
@@ -63,11 +67,15 @@ check('artifact filter drops 1200 after 810 and 300 after 805', JSON.stringify(r
 // after 1200, prev=1200 so 805 is also rejected (as in FatMaxxer); then 300 rejected; then 790 vs prev 300 → rejected. Matches FatMaxxer semantics.
 
 // 4) Streaming window reproduces batch alpha1 on the same samples
-const win = new Alpha1Window({ windowSec: 120 });
-const t0 = csv[0][0];
-for (const r of csv) { if (r[0] <= csv[500][0]) win.pushAccepted(r[0], r[1]); }
-const feat = win.features();
-check('Alpha1Window matches batch on w500', Math.abs(feat.alpha1 - alpha1FatMaxxer(windows['w500'])) < 1e-9, `${feat.alpha1.toFixed(4)} hr=${feat.hr.toFixed(1)} n=${feat.samples}`);
+{ const win = new Alpha1Window({ windowSec: 120 }); let t = 1_700_000_000_000; const inWin = [];
+  for (const rr of synth) { t += rr; win.pushAccepted(t, rr); } const tEnd = t; t = 1_700_000_000_000; for (const rr of synth) { t += rr; if (t > tEnd - 120000) inWin.push(rr); }
+  const feat = win.features(); check('Alpha1Window matches batch on the synthetic series', Math.abs(feat.alpha1 - alpha1FatMaxxer(inWin)) < 1e-9 && feat.samples === inWin.length, `${feat.alpha1.toFixed(4)} hr=${feat.hr.toFixed(1)} n=${feat.samples}`); }
+if (haveFixture) {
+  const win = new Alpha1Window({ windowSec: 120 });
+  for (const r of csv) { if (r[0] <= csv[500][0]) win.pushAccepted(r[0], r[1]); }
+  const feat = win.features();
+  check('Alpha1Window matches batch on w500', Math.abs(feat.alpha1 - alpha1FatMaxxer(windows['w500'])) < 1e-9, `${feat.alpha1.toFixed(4)} hr=${feat.hr.toFixed(1)} n=${feat.samples}`);
+}
 
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL PASS');
 process.exit(failures ? 1 : 0);
