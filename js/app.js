@@ -5,13 +5,13 @@ import { Alerts } from './alerts.js';
 import { HeartRateSource } from './ble.js';
 import { ReplaySource, DemoSource, demoProfileForEngine } from './sources.js';
 import { SessionEngine, DEFAULT_PROTOCOL, DEFAULT_INTERVALS, buildStages, computeFeaturesOffline } from './session.js';
-import { analyzeSession, summarizeStages, smo2Steady } from './analysis.js';
+import { analyzeSession, summarizeStages, smo2Steady, estimateOffsetMs } from './analysis.js';
 import { computeZones, sessionTargets, weeklyPlan, lt2Structure, sessionMetrics, assessRecent, sessionSummaryText, claudeSummary, lactateChecks, lactateVerdict, multiDayCurve, endWindowStats } from './prescribe.js';
 import { importFile } from './importers.js';
 import { liveChart, timelineChart, stepTestChart, trendChart } from './charts.js';
 
 // ---------- defaults ----------
-export const APP_VERSION = '1.1.6'; // keep in sync with sw.js VERSION
+export const APP_VERSION = '1.1.7'; // keep in sync with sw.js VERSION
 const DEFAULTS = {
   profile: { birth: '1997-07-21', restHr: 52, maxHr: 188, maxHrMode: 'tanaka', lang: 'both', theme: 'system' },
   treadmill: { model: 'LTSXL', minSpeed: 0.8, maxSpeed: 18, speedStep: 0.1, maxIncline: 15, inclineStep: 0.5 },
@@ -319,7 +319,7 @@ async function renderSessionDetail(id) {
   A.detail = s;
   const r = analyzeSession(s); const m = sessionMetrics(s); const z = zonesObj(); const txt = sessionSummaryText(s, m, z, r);
   let html = `<div class="row between"><button class="compact ghost" data-action="back">‹ ${t('sessions')}</button><div class="row"><button class="compact ghost" data-action="export-csv">${t('export_csv')}</button><button class="compact ghost danger" data-action="delete-session">${t('delete')}</button></div></div>
-    <h3 style="margin-top:10px">${typeLabel(s.type)} · ${fmtDate(s.startedAt)}</h3><p class="small muted">${esc(s.sourceKind || '')} · ${fmtClock(m.durationSec)}${s.smo2?.series?.length ? ` · SmO2 ${esc(s.smo2.position || '')} (${s.smo2.series.length} pts, offset ${Math.round((s.smo2.offsetMs || 0) / 1000)} s)` : ''}</p>
+    <h3 style="margin-top:10px">${typeLabel(s.type)} · ${fmtDate(s.startedAt)}</h3><p class="small muted">${esc(s.sourceKind || '')} · ${fmtClock(m.durationSec)}${s.smo2?.series?.length ? ` · SmO2 ${esc(s.smo2.position || '')} (${s.smo2.series.length} pts, offset ${Math.round((s.smo2.offsetMs || 0) / 1000)} s · ${alignmentText(s.smo2)})` : ''}</p>
     <div class="card"><dl class="kv"><dt>${t('duration')}</dt><dd>${fmtClock(m.durationSec)}</dd><dt>${t('hr')}</dt><dd>${n0(m.meanHr)} / max ${n0(m.maxHr)}</dd><dt>${t('mean_alpha')}</dt><dd>${n2(m.meanAlpha1)} (≥0.75: ${n0(m.pctAlphaAbove75)}%)</dd><dt>${t('drift')}</dt><dd>${Number.isFinite(m.driftPct) ? (m.driftPct >= 0 ? '+' : '') + m.driftPct.toFixed(1) + '%' : '–'}</dd><dt>${t('artifacts')}</dt><dd>${n1(m.artifactPct)}%</dd>${Number.isFinite(m.timeInZonePct) ? `<dt>${t('time_in_zone')}</dt><dd>${n0(m.timeInZonePct)}%</dd>` : ''}</dl>
       <p style="margin-top:10px"><span class="ko">${esc(txt.ko)}</span><span class="en">${esc(txt.en)}</span></p></div>
     <div class="card" style="margin-top:10px;padding:8px 6px 4px"><div class="chart" id="tl-chart"></div></div>
@@ -361,7 +361,7 @@ async function renderSessionDetail(id) {
   const tbl = $('#stage-table'); if (tbl) tbl.addEventListener('change', async e => { const inp = e.target; const tr = inp.closest('tr'); if (!tr) return; const idx = +tr.dataset.idx; const st = s.stages.find(x => x.idx === idx); if (!st) return; const val = inp.value === '' ? null : +inp.value; st[inp.dataset.f] = val; if (s.type === 'test') s.result = resultFrom(analyzeSession(s)); await store.putSession(s); await renderSessionDetail(id); });
   for (const [id, key] of [['vc-speed', 'speed'], ['vc-incline', 'incline']]) { const el = document.getElementById(id); if (el) el.onchange = async () => { s[key] = el.value === '' ? null : +el.value; await store.putSession(s); destroyCharts(); await renderSessionDetail(id === 'vc-speed' ? s.id : s.id); }; }
   for (const [id, key] of [['vc-rest', 'rest'], ['vc-mid', 'mid'], ['vc-end', 'end']]) { const el = document.getElementById(id); if (el) el.onchange = async () => { s.lactateChecks = { ...lactateChecks(s), [key]: el.value === '' ? null : +el.value }; await store.putSession(s); destroyCharts(); await renderSessionDetail(s.id); }; }
-  const off = $('#smo2-offset'); if (off) off.onchange = async () => { s.smo2.offsetMs = (+off.value || 0) * 1000; await store.putSession(s); destroyCharts(); await renderSessionDetail(id); };
+  const off = $('#smo2-offset'); if (off) off.onchange = async () => { s.smo2.offsetMs = (+off.value || 0) * 1000; s.smo2.alignment = { ...(s.smo2.alignment || {}), method: 'manual', ok: true, mad: s.smo2.alignment?.mad ?? NaN, estimatedMs: s.smo2.alignment?.estimatedMs ?? s.smo2.offsetMs }; await store.putSession(s); destroyCharts(); await renderSessionDetail(id); };
 }
 async function applyZonesFromDetail() {
   const s = A.detail; if (!s) return; const r = analyzeSession(s); const tri = r.tri; if (!tri.lt1 || !tri.lt2) return;
@@ -373,7 +373,7 @@ function attachSmo2Modal() {
   const s = A.detail; const cands = A.imports.filter(i => i.smo2Series && i.smo2Series.length);
   if (!cands.length) { toast('먼저 Train.Red CSV/FIT를 가져오세요 / Import a Train.Red file first'); return; }
   const list = cands.map(i => { const ov = Math.max(0, Math.min(i.endedAt, s.endedAt || i.endedAt) - Math.max(i.startedAt, s.startedAt)) / 1000; return `<div class="list-item" data-imp="${i.id}"><div><div class="t">${esc(i.filename)}</div><div class="s">${fmtDate(i.startedAt)} · ${fmtClock(i.durationSec)} · ${esc(i.meta?.position || '')} · 겹침/overlap ${fmtClock(ov)}</div></div><div>›</div></div>`; }).join('');
-  modal(`<h3>${t('attach_smo2')}</h3>${list}<p class="small muted">세션과 겹치지 않아도 붙일 수 있습니다(시작 시각 기준 정렬, 보정 슬라이더로 맞추세요). / Files that don't overlap can still be attached (aligned by start time; use the offset to align).</p>`, (m, close) => { m.addEventListener('click', async e => { const it = e.target.closest('[data-imp]'); if (!it) return; const imp = await store.getImport(it.dataset.imp); const ov = imp.startedAt < (s.endedAt || Infinity) && imp.endedAt > s.startedAt; s.smo2 = { importId: imp.id, source: imp.source, position: imp.meta?.position || '', series: imp.smo2Series.map(p => [p[0], p[1], p[2]]), offsetMs: ov ? 0 : (s.startedAt - imp.startedAt) }; if (s.type === 'test') s.result = resultFrom(analyzeSession(s)); await store.putSession(s); close(); destroyCharts(); await renderSessionDetail(s.id); }); });
+  modal(`<h3>${t('attach_smo2')}</h3>${list}<p class="small muted">세션과 겹치지 않아도 붙일 수 있습니다(시작 시각 기준 정렬, 보정 슬라이더로 맞추세요). / Files that don't overlap can still be attached (aligned by start time; use the offset to align).</p>`, (m, close) => { m.addEventListener('click', async e => { const it = e.target.closest('[data-imp]'); if (!it) return; const imp = await store.getImport(it.dataset.imp); const ov = imp.startedAt < (s.endedAt || Infinity) && imp.endedAt > s.startedAt; s.smo2 = buildSmo2(s, imp, { overlap: ov }); if (s.type === 'test') s.result = resultFrom(analyzeSession(s)); await store.putSession(s); close(); destroyCharts(); await renderSessionDetail(s.id); }); });
 }
 function exportSessionCsv(s) {
   const r = analyzeSession(s); const L = [];
@@ -411,14 +411,30 @@ async function handleFiles(files) {
       } else if (imp.source === 'trainred-csv' || imp.source === 'fit') {
         const rec = { id: uid(), source: imp.source, filename: imp.filename, startedAt: imp.startedAt, endedAt: imp.endedAt, durationSec: imp.durationSec, smo2Series: imp.smo2Series, hrSeries: imp.hrSeries || [], laps: imp.laps || [], meta: imp.meta || {} };
         await store.putImport(rec); made++;
-        const target = await findOverlapSession(rec); if (target) { target.smo2 = { importId: rec.id, source: rec.source, position: rec.meta.position || '', series: rec.smo2Series.map(p => [p[0], p[1], p[2]]), offsetMs: 0 }; if (target.type === 'test') target.result = resultFrom(analyzeSession(target)); await store.putSession(target); toast(`SmO2 자동 연결 / auto-attached → ${fmtDate(target.startedAt)}`); } else toast(`SmO2 가져옴 / imported (${esc(imp.meta?.position || '')}, ${fmtClock(imp.durationSec)})`);
+        const target = await findOverlapSession(rec); if (target) { target.smo2 = buildSmo2(target, rec); if (target.type === 'test') target.result = resultFrom(analyzeSession(target)); await store.putSession(target); const al = target.smo2.alignment; toast(`SmO2 자동 연결 / auto-attached → ${fmtDate(target.startedAt)}${al ? (al.ok ? ` · 시간 보정 ${Math.round(target.smo2.offsetMs / 1000)} s ✓` : ' · ⚠ 정렬 확인 필요') : ''}`, 5000); } else toast(`SmO2 가져옴 / imported (${esc(imp.meta?.position || '')}, ${fmtClock(imp.durationSec)})`);
       } else if (imp.source === 'fatmaxxer-features') { await store.putImport({ id: uid(), source: imp.source, filename: imp.filename, startedAt: imp.features[0]?.t, endedAt: imp.features[imp.features.length - 1]?.t, durationSec: ((imp.features[imp.features.length - 1]?.t || 0) - (imp.features[0]?.t || 0)) / 1000, features: imp.features, meta: {} }); made++; toast('FatMaxxer features imported'); }
     } catch (e) { console.error(e); toast(`가져오기 실패 / import failed: ${esc(file.name)} — ${esc(e.message)}`, 4000); }
   }
   if (made) { await refreshLists(); if (A.view === 'analysis' && !A.param) render(); }
 }
 async function findOverlapSession(rec) { const all = await store.listSessions(); let best = null, bestOv = 0; for (const s of all) { if (!s.endedAt) continue; const ov = Math.min(rec.endedAt, s.endedAt) - Math.max(rec.startedAt, s.startedAt); if (ov > bestOv) { bestOv = ov; best = s; } } return bestOv > 0.5 * (rec.endedAt - rec.startedAt) ? best : null; }
-async function autoAttach(sess) { if (sess.smo2) return; const imps = await store.listImports(); for (const i of imps) { if (!i.smo2Series?.length) continue; const ov = Math.min(i.endedAt, sess.endedAt) - Math.max(i.startedAt, sess.startedAt); if (ov > 0.5 * (i.endedAt - i.startedAt)) { sess.smo2 = { importId: i.id, source: i.source, position: i.meta?.position || '', series: i.smo2Series.map(p => [p[0], p[1], p[2]]), offsetMs: 0 }; await store.putSession(sess); return; } } }
+/** Build session.smo2 from an import record; align by heart rate when both sides carry HR (same H10). */
+function buildSmo2(sess, imp, { overlap = true } = {}) {
+  const smo2 = { importId: imp.id, source: imp.source, position: imp.meta?.position || '', series: imp.smo2Series.map(p => [p[0], p[1], p[2]]), offsetMs: overlap ? 0 : (sess.startedAt - imp.startedAt), alignment: null };
+  const hrS = sess.hrLive?.length ? sess.hrLive : (sess.features || []).filter(f => f.hrInst > 0).map(f => [f.t, f.hrInst]);
+  if (hrS.length >= 60 && imp.hrSeries?.length >= 60) {
+    const est = estimateOffsetMs(hrS, imp.hrSeries.map(p => [p[0] + smo2.offsetMs, p[1]]));
+    smo2.alignment = { method: 'hr', ok: est.ok, mad: est.mad, n: est.n, estimatedMs: est.offsetMs + smo2.offsetMs };
+    if (est.ok && Math.abs(est.offsetMs) >= 1500) smo2.offsetMs += est.offsetMs;
+  }
+  return smo2;
+}
+function alignmentText(smo2) {
+  const a = smo2?.alignment; if (!a) return '정렬: 시작 시각 기준 (심박 없음 — 수동 확인) / aligned by clock only (no HR to cross-check)';
+  if (!a.ok) return `정렬 불확실: 심박 불일치 ${a.mad.toFixed(1)} bpm — 보정값 확인 / alignment uncertain (HR mismatch ${a.mad.toFixed(1)} bpm) — check the offset`;
+  return `심박 교차검증 ✓ 오차 ${a.mad.toFixed(2)} bpm, 추정 ${Math.round(a.estimatedMs / 1000)} s / HR-verified, ${a.mad.toFixed(2)} bpm, est. ${Math.round(a.estimatedMs / 1000)} s`;
+}
+async function autoAttach(sess) { if (sess.smo2) return; const imps = await store.listImports(); for (const i of imps) { if (!i.smo2Series?.length) continue; const ov = Math.min(i.endedAt, sess.endedAt) - Math.max(i.startedAt, sess.startedAt); if (ov > 0.5 * (i.endedAt - i.startedAt)) { sess.smo2 = buildSmo2(sess, i); await store.putSession(sess); return; } } }
 $('#file-input').addEventListener('change', async e => { const files = [...e.target.files]; e.target.value = ''; if (A.pendingReplayPick) { A.pendingReplayPick = false; if (files[0]) { try { const imp = await importFile(files[0]); if (!imp.rr?.length) throw new Error('no RR'); A.live.replay = { rr: imp.rr, filename: files[0].name, durationSec: imp.durationSec }; toast(`${imp.rr.length} RR`); } catch (err) { toast('RR 파일이 아닙니다 / not an RR file'); } render(); } return; } await handleFiles(files); });
 
 // ---------- PLAN ----------

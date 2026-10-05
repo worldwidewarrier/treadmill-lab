@@ -146,6 +146,28 @@ export function smo2Steady(session, { earlyFrom = 300, earlyTo = 600, endSec = 3
   return res;
 }
 
+/**
+ * Estimate the clock offset of an imported series relative to the session by matching heart rate
+ * (Train.Red / Garmin exports carry the same H10 heart rate the app recorded).
+ * Returns { offsetMs, mad, n, ok } with offsetMs in the app's convention: importTime + offsetMs = sessionTime.
+ */
+export function estimateOffsetMs(sessionHr, importHr, { maxLagSec = 180, stepSec = 1, maxPoints = 600 } = {}) {
+  const S = (sessionHr || []).filter(p => p && p[1] > 0), I = (importHr || []).filter(p => p && p[1] > 0);
+  if (S.length < 60 || I.length < 60) return { offsetMs: 0, mad: NaN, n: 0, ok: false };
+  const stride = Math.max(1, Math.floor(S.length / maxPoints)); const pts = S.filter((_, i) => i % stride === 0);
+  const it = I.map(p => p[0]), ih = I.map(p => p[1]);
+  const at = (t) => { let lo = 0, hi = it.length - 1; while (lo < hi) { const mid = (lo + hi) >> 1; if (it[mid] < t) lo = mid + 1; else hi = mid; } const k = (lo > 0 && Math.abs(it[lo - 1] - t) < Math.abs(it[lo] - t)) ? lo - 1 : lo; return Math.abs(it[k] - t) <= 2500 ? ih[k] : null; };
+  let best = null;
+  for (let off = -maxLagSec; off <= maxLagSec; off += stepSec) {
+    let sum = 0, n = 0;
+    for (const [t, h] of pts) { const v = at(t - off * 1000); if (v == null) continue; sum += Math.abs(h - v); n++; }
+    if (n < 60) continue; const mad = sum / n;
+    if (!best || mad < best.mad) best = { offsetMs: off * 1000, mad, n };
+  }
+  if (!best) return { offsetMs: 0, mad: NaN, n: 0, ok: false };
+  return { ...best, ok: best.mad < 2.5 };
+}
+
 export function smo2Breakpoints(rows) {
   const valid = rows.filter(r => Number.isFinite(r.smo2) && Number.isFinite(r.speed));
   const res = { bp1: null, bp2: null, points: valid.length, note: '', slopes: valid.map(r => ({ speed: r.speed, slope: r.smo2Slope })) };

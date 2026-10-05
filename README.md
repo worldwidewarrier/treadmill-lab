@@ -60,6 +60,7 @@ H10은 블루투스 2개 + ANT+를 동시에 지원하므로 이 앱(RR) + Train
 - **SmO2**: 단계 마지막 60초 평균 vs 속도의 2-분절 선형 회귀 → BP1/BP2, 2분 기울기 < −0.5 %/min = 비정상 상태.
 - **SmO2 (일정 부하 세션)**: 5–10분 평균 vs 마지막 5분 평균(드리프트), 마지막 10분 기울기 > −0.3 %/min = 안정 상태, THb 평균 < 12 = 접촉 불량 의심. 젖산 검증 카드·요약·CSV에 표시.
 - **삼각측량**: 젖산 = 기준. 차이 ≤5 bpm 일치 / 5–10 주의 / >10 불일치. 등급 A(젖산 + 6단계↑ + 일치 1↑, 불일치 0) / B / C.
+- **SmO2 시간 정렬**: Train.Red/가민 파일에 심박이 있으면 세션의 H10 심박과 교차상관(±180 s, 1 s 간격)으로 시계 오차를 추정해 자동 보정하고(평균 오차 < 2.5 bpm일 때), 세션 상세·요약에 '심박 교차검증 ✓'로 표시합니다. 심박이 없는 파일은 시작 시각 기준 정렬 + 수동 보정.
 - **심박 드리프트**: 마지막 1/3 vs 첫 1/3 (15분 이상 세션은 처음 5분 램프업 제외).
 - **처방**: 3존·5존, LT1 세션 = LT1 −10~−3 bpm(α1 ≥0.75 유지), LT2 세션 = LT2 ±3, 주 1회 LT2(4×8 → 4×10 → 5×10 → 회복 → 3×15 → 2×20 → 템포 30 → 회복), 긴 LT1 매주 +10분, 자동 조정(α1 <0.70 → −3 bpm 등), 8주 또는 드리프트 시 재검사.
 
@@ -74,6 +75,7 @@ node test/test_prescribe.mjs       # zones, weekly plan, insights
 node test/test_session.mjs         # full synthetic step test through the engine (×120)
 TZ=Asia/Seoul node test/test_importers.mjs   # Train.Red CSV/FIT, FatMaxxer, Garmin FIT (python3 test/make_fit.py first)
 node test/test_version.mjs         # APP_VERSION (app.js) == sw.js VERSION
+TZ=Asia/Seoul node test/test_align.mjs       # SmO2 clock-offset estimator (synthetic lags + real Train.Red file if present)
 node test/ui_smoke.mjs             # headless Chromium at 384×604 (needs playwright)
 ```
 
