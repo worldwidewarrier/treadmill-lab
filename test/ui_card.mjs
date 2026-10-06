@@ -78,6 +78,15 @@ await open('card-mlss'); await change('#vc-mid', ''); c = await card();
 check('emptying the 10-min field keeps it empty (and the verdict follows)', c.mid === '' && c.end === '4.1' && !c.notices.some(n => /10분→종료 상승/.test(n)), c.notices.map(n => n.slice(0, 30)).join(' | '));
 await change('#vc-end', '5.2'); c = await card();
 check('typing the end value changes only that field', c.end === '5.2' && c.mid === '' && (await page.evaluate(() => JSON.stringify(TL.detail.lactateChecks))) === '{"mid":null,"end":5.2}');
+await change('#vc-end', '0'); c = await card(); const tz = await page.evaluate(() => document.querySelector('.toast')?.textContent || '');
+check('a lactate value outside 0.3–25 is refused and the field restored', c.end === '5.2' && /0\.3–25/.test(tz), `${c.end} ${tz}`);
+await change('#vc-end', '4,7'); c = await card();
+check('a decimal comma is read as a point ("4,7" = 4.7)', c.end === '4.7' && (await page.evaluate(() => TL.detail.lactateChecks.end)) === 4.7, c.end);
+// typing into the next field straight after editing one: neither edit is lost
+{ await page.click('#vc-rest'); await page.fill('#vc-rest', '1.4'); await page.click('#vc-end'); await page.keyboard.press('Control+A'); await page.keyboard.type('2.9'); await page.waitForTimeout(400);
+  const mid = await page.evaluate(() => ({ focus: document.activeElement?.id, end: document.getElementById('vc-end').value }));
+  await page.click('h2'); await page.waitForTimeout(600); const stored = await page.evaluate(() => TL.detail.lactateChecks);
+  check('typing into the next field right after editing one keeps both (the card waits until the field is left)', mid.focus === 'vc-end' && mid.end === '2.9' && stored.rest === 1.4 && stored.end === 2.9, `${JSON.stringify(mid)} ${JSON.stringify(stored)}`); }
 // 4b) the numbers kept with the session (shown in the list) follow once it has been opened
 { await open('card-lt1'); await page.waitForTimeout(300);
   const kept = await page.evaluate(async () => { const { store } = await import('./js/store.js'); const s = await store.getSession('card-lt1'); return s.metrics; });

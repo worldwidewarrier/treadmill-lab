@@ -133,7 +133,7 @@ const truthHr = (s, a, b) => mean(s.hrLive.filter(p => p[0] >= T0 + a * 1000 && 
   // straight into a 6-min cool-down jog 18 bpm lower, then stood for the sample
   const jog = mk({ hr: simHr({ segs: [{ until: 1800, hr: run }, { until: 2160, hr: 144, tau: 45 }, { until: 2250, hr: 102, tau: 55 }], seed: 2 }), speed: 10.8, purpose: 'mlss', lactate: [[2230, 4.6]] }); const tj = runTimeline(jog);
   check('6-min jog 18 bpm lower, then the sample: two steps down — the first is shown as the end, nothing is concluded', tj.how === 'sample' && !tj.sure && tj.why === 'two-steps' && Math.abs(rel(jog, tj.end) - 1800) <= 35, `${mmss(rel(jog, tj.end))} ${tj.why}`);
-  check('  the value is still the end sample (by the clock of the recording), the proxy call is withheld, no zone moves', lactateChecks(jog).end === 4.6 && lactateVerdict(jog).unsure === true && verdictZoneChange(ZL, jog) === null && Number.isNaN(multiDayCurve([{ ...jog, id: 'j', startedAt: Date.now() - 1000 }]).points[0].hr));
+  check('  the value is still the end sample (typed after the stop), the proxy call is withheld, no zone moves', lactateChecks(jog).end === 4.6 && lactateVerdict(jog).unsure === true && verdictZoneChange(ZL, jog) === null && Number.isNaN(multiDayCurve([{ ...jog, id: 'j', startedAt: Date.now() - 1000 }]).points[0].hr));
   check('  session numbers stay those of the whole recording', Math.abs(sessionMetrics(jog).meanHr - truthHr(jog, 0, 2251)) < 1e-9);
   // the same with the end confirmed in the card
   const jogOk = { ...jog, runEndSec: 1800 }; const tk = runTimeline(jogOk);
@@ -276,7 +276,7 @@ const truthHr = (s, a, b) => mean(s.hrLive.filter(p => p[0] >= T0 + a * 1000 && 
   s.runEndSec = 1500; const cut = runTimeline(s); const ew = endWindowStats(s);
   check('  an earlier time: the windows end there', cut.end === T0 + 1500000 && Math.abs(ew.hr - truthHr(s, 1200, 1501)) < 1e-9 && Math.abs(endOnlyProxy(s).durMin - 25) < 1e-9 && cut.tailSec === 900);
   check('  a value typed within a minute before it or later is the end sample', (() => { const x = mk({ hr, speed: 9, lactate: [[1470, 2.2]] }); x.runEndSec = 1500; return lactateChecks(x).end === 2.2; })() && (() => { const x = mk({ hr, speed: 9, lactate: [[1300, 2.2]] }); x.runEndSec = 1500; return lactateChecks(x).end === 2.2 /* last 5 min of the run by the clock */; })() && (() => { const x = mk({ hr, speed: 9, lactate: [[700, 2.2]] }); x.runEndSec = 1500; return lactateChecks(x).mid === 2.2; })());
-  for (const bad of [0, -5, 99999, NaN, '1500']) { s.runEndSec = bad; }
+  for (const bad of [0, -5, NaN, -Infinity]) { s.runEndSec = bad; check(`  ${bad} is ignored`, runTimeline(s).how !== 'manual'); }
   s.runEndSec = 99999; check('  a time outside the recording is ignored', runTimeline(s).how !== 'manual'); s.runEndSec = 0; check('  zero is ignored', runTimeline(s).how !== 'manual'); s.runEndSec = '1500'; check('  text is ignored', runTimeline(s).how !== 'manual');
   delete s.runEndSec; check('  removing it returns to the automatic end', runTimeline(s).how === auto.how && runTimeline(s).end === auto.end);
   check('the timeline is computed once per session state', runTimeline(s) === runTimeline(s));
@@ -378,7 +378,7 @@ const truthHr = (s, a, b) => mean(s.hrLive.filter(p => p[0] >= T0 + a * 1000 && 
     const same = tl.how === 'finish' && tl.sure && tl.stops.length === 0 && ew.hr === baseWin(s) && (px.driftBpm === baseDrift(s) || (Number.isNaN(px.driftBpm) && Number.isNaN(baseDrift(s)))) && Math.abs(px.durMin - run / 60) < 1e-9 && c.rest === b.rest && c.mid === b.mid && c.end === b.end;
     if (!same) { bad++; if (badEx.length < 3) badEx.push(`#${k} run ${mmss(run)} ${tl.how}/${tl.sure} end ${mmss(rel(s, tl.end))} hr ${ew.hr} vs ${baseWin(s)}`); }
   }
-  check(`${n} runs finished while running (steady, drifting, slow start, fast finish, progressive, pace raised): every figure as in v1.1.11`, bad === 0, bad ? `${bad} differ: ${badEx.join(' | ')}` : '');
+  check(`${n} runs finished while running (steady, drifting, slow start, fast finish, progressive, pace raised): last-5-min heart rate, drift, running time and the three lactate fields as by the formulas of v1.1.11`, bad === 0, bad ? `${bad} differ: ${badEx.join(' | ')}` : '');
 }
 
 // ───────────── 14. Many simulated verification runs: is the end found, and how far off? ─────────────
@@ -711,6 +711,59 @@ const truthHr = (s, a, b) => mean(s.hrLive.filter(p => p[0] >= T0 + a * 1000 && 
   check('  how often the plain cases are called certain: stand-still ≥ 95 %, with a 10-min stop 100 %, a surge in mid-run ≥ 80 %, LT2 mode ≥ 90 %', rate('stand') >= 0.95 && rate('mlss10') === 1 && rate('surge:mid') >= 0.8 && rate('lt2') >= 0.9, `${(100 * rate('stand')).toFixed(0)} / ${(100 * rate('mlss10')).toFixed(0)} / ${(100 * rate('surge:mid')).toFixed(0)} / ${(100 * rate('lt2')).toFixed(0)} %`);
   { let n = 0, sure = 0, flagged = 0, nLong = 0; for (let k = 1; k <= N; k++) { if (k % 12 !== 1) continue; const { P, session: s } = scenario(k); const tl = runTimeline(s); if (P.d1 <= 170 && P.D1 >= 12) { n++; if (tl.sure) sure++; } if (P.d1 >= 190 && P.D1 >= 12) { nLong++; if (!tl.sure) flagged++; } }
     check('  a walk of under 3 min before standing leaves no doubt; one of more than 3 min is flagged (two steps down, minutes apart)', n >= 10 && sure === n && nLong >= 10 && flagged >= 0.9 * nLong, `short walk: ${sure}/${n} certain; long walk: ${flagged}/${nLong} flagged`); }
+}
+
+// ───────────── 20. Findings of the third review ─────────────
+{
+  const Z = { lt1Hr: 140, lt1Speed: 8.4, lt2Hr: 120, lt2Speed: 9 };
+  // a faster first 10 min (or the level before a mid stop) above the final level, a recovery tail, values in the card: never "end of the recording, certain"
+  { const hr = simHr({ segs: [{ until: 600, hr: 160 }, { until: 690, hr: 115, fast: 0.4 }, { until: 1890, hr: 154 }, { until: 1980, hr: 110, fast: 0.5 }, { until: 2130, hr: 116, tau: 40 }], seed: 201 });
+    const s = mk({ hr, purpose: 'mlss', extra: { lactateChecks: { mid: 4.9, end: 6.3 } } }); const tl = runTimeline(s); const z = verdictZoneChange(Z, s);
+    check('earlier level above the final one, a recovery tail, nothing typed in the session: an estimate, not "certain"', !tl.sure && Math.abs(rel(s, tl.end) - 1890) <= 30 && (!z || z.zones.lt2Hr === 120), `${tl.how} ${tl.sure} ${mmss(rel(s, tl.end))}`); }
+  // a cool-down jog 5 bpm below the run, then a walk down, Finish: not certain
+  { const hr = simHr({ segs: [{ until: 1800, hr: 158 }, { until: 1870, hr: 115, fast: 0.4 }, { until: 2350, hr: 153, tau: 40 }, { until: 2530, hr: 105, tau: 60 }], seed: 202 });
+    const s = mk({ hr, purpose: 'mlss', extra: { lactateChecks: { end: 2.6 } } }); const tl = runTimeline(s);
+    check('a cool-down jog near the running level, then a walk down: not "end of the recording, certain"', !tl.sure, `${tl.how} ${tl.sure}`); }
+  // a walk after the stop and a second value after it: the first value is the end value, the walk is not running
+  { const hr = simHr({ segs: [{ until: 1800, hr: sec => 150 + 8 * sec / 1800 }, { until: 1920, hr: 108, fast: 0.5 }, { until: 2100, hr: 118, tau: 40 }, { until: 2160, hr: 104, fast: 0.3 }], seed: 203 });
+    const s = mk({ hr, purpose: 'mlss', speed: 10.8, lactate: [[1845, 6.4], [2130, 5.9]] }); const c = lactateChecks(s); const tl = runTimeline(s);
+    check('a second value after a 3-min walk: the first is the end sample, the end is the stop', c.end === 6.4 && c.mid === null && Math.abs(rel(s, tl.end) - 1800) <= 30, `${JSON.stringify(c)} ${tl.how} ${mmss(rel(s, tl.end))}`); }
+  // a kick at the end, slow recovery, value typed 20 s after the stop, Finish 3 min later: not "certain" with the recovery inside
+  { const hr = simHr({ segs: [{ until: 1560, hr: 150 }, { until: 1800, hr: 175, tau: 30 }, { until: 1980, hr: 100, tau: 250 }], seed: 204 });
+    const s = mk({ hr, purpose: 'mlss', lactate: [[1820, 5.0]] }); const tl = runTimeline(s); const ew = endWindowStats(s);
+    check('a kick, a slow recovery, Finish 3 min after the value: either the stop or flagged — never the recording end called certain', !(tl.how === 'finish' && tl.sure), `${tl.how} ${tl.sure} HR ${ew.hr.toFixed(1)}`); }
+  // LT2 one rep, belt stopped 40 s before the rep clock, nothing typed: not the clock
+  { const hr = simHr({ segs: [{ until: 600, hr: 125 }, { until: 2360, hr: 166 }, { until: 2700, hr: 105, fast: 0.5 }], seed: 205 });
+    const s = mk({ hr, type: 'lt2', phases: [[0, 'warmup'], [600, 'work'], [2400, 'cooldown']], extra: { lactateChecks: { end: 6.2 } } }); const tl = runTimeline(s);
+    check('LT2 rep: belt stopped 40 s before the rep clock — the clock is not taken for a certain end', !(tl.how === 'phase' && tl.sure), `${tl.how} ${tl.sure} ${mmss(rel(s, tl.end))}`); }
+  // after the 10-min stop the running goes on 8 bpm lower; both values typed: the stop ends where the lower running began
+  { const hr = simHr({ segs: [{ until: 600, hr: 160 }, { until: 690, hr: 115, fast: 0.4 }, { until: 1890, hr: 152 }, { until: 2000, hr: 108, fast: 0.5 }], seed: 206 });
+    const s = mk({ hr, purpose: 'mlss', lactate: [[650, 4.0], [1935, 6.4]] }); const tl = runTimeline(s); const ew = endWindowStats(s);
+    check('running 8 bpm lower after the 10-min stop: the stop is short, the last 5 min are those of the lower running', tl.sure && tl.stops.length === 1 && rel(s, tl.stops[0][1]) < 800 && Math.abs(ew.hr - truthHr(s, 1590, 1890)) < 1, `stop to ${mmss(rel(s, tl.stops[0][1]))}, HR ${ew.hr.toFixed(1)}`);
+    const s2 = mk({ hr, purpose: 'mlss', lactate: [[650, 4.0]], extra: { lactateChecks: { end: 4.6 } } }); const t2 = runTimeline(s2);
+    check('  …with the end value in the card: the 10-min stop is not taken for the end of the run', !(t2.sure && rel(s2, t2.end) < 900) && lactateChecks(s2).mid === 4.0, `${t2.how} ${t2.sure} ${mmss(rel(s2, t2.end))}`); }
+  // Pause 4 min after a 15-bpm drop: flagged like a lactate value would be
+  { const hr = simHr({ segs: [{ until: 1800, hr: 160 }, { until: 2040, hr: 145, tau: 40 }, { until: 2060, hr: 140 }], seed: 207 });
+    const s = mk({ hr, purpose: 'mlss', pauses: [[2040, null]], extra: { lactateChecks: { end: 4.0 } } }); const tl = runTimeline(s);
+    check('a Pause pressed minutes after a shallow drop: flagged (slowed, or stopped?)', !tl.sure && tl.why === 'shallow', `${tl.how} ${tl.sure} ${tl.why}`); }
+  // multi-day: the fastest runs uncertain — no threshold heart rate borrowed from a slower run
+  { const day = 86400000; const now = Date.now();
+    const sess = (speed, la, level, daysAgo, typed) => { const hr = simHr({ segs: [{ until: 1800, hr: level }, { until: 1800 + 240, hr: level - 45, fast: 0.5 }], seed: speed * 10 + 3 }); const s = typed ? mk({ hr, speed, lactate: [[1860, la]] }) : mk({ hr, speed, extra: { lactateChecks: { end: la } } }); const shift = now - daysAgo * day - T0; s.startedAt += shift; s.endedAt += shift; s.hrLive = s.hrLive.map(p => [p[0] + shift, p[1]]); s.features = []; s.events = s.events.map(e => ({ ...e, t: e.t + shift })); return s; };
+    const md = multiDayCurve([sess(8, 1.1, 128, 9, true), sess(9, 1.4, 137, 7, true), sess(10, 1.9, 146, 5, true), sess(11, 2.9, 155, 3, false), sess(12, 4.4, 164, 1, false)]);
+    check('multi-day curve with the two fastest runs uncertain: their heart rate is not copied from the 10-km/h run, LT2 gets no heart rate', md.points.filter(p => p.unsure).length === 2 && md.analysis && !Number.isFinite(md.analysis.lt2Primary.hr), md.analysis ? `LT2 ${md.analysis.lt2Primary.x.toFixed(2)} km/h ${md.analysis.lt2Primary.hr}` : 'no analysis'); }
+  // a record whose card fields were stored by v1.1.11 (all three at once): only the typed one is final
+  { const hr = simHr({ segs: [{ until: 600, hr: 158 }, { until: 680, hr: 115, fast: 0.4 }, { until: 1830, hr: 160 }, { until: 2400, hr: 105, fast: 0.5 }], seed: 208 });
+    const s = mk({ hr, purpose: 'mlss', lactate: [[640, 2.9], [1870, 3.4]] }); const fresh = lactateChecks(s);
+    const legacy = { ...s, lactateChecks: { rest: 1.2, mid: 2.9, end: null } }; const now = { ...s, lactateChecks: { rest: 1.2, mid: 2.9, end: null }, lactateChecksV: 2 };
+    check('card fields stored by v1.1.11: the untouched ones follow today\'s filing; stored by v1.1.12 they are final', fresh.end === 3.4 && lactateChecks(legacy).end === 3.4 && lactateChecks(legacy).rest === 1.2 && lactateChecks(now).end === null, `${JSON.stringify(lactateChecks(legacy))} / ${JSON.stringify(lactateChecks(now))}`); }
+  // a heart-rate clock jump of a year: quick
+  { const hr = simHr({ segs: [{ until: 1800, hr: 150 }, { until: 1900, hr: 105, fast: 0.5 }], seed: 209 }).map(p => p[0] > T0 + 1200000 ? [p[0] + 365 * 86400000, p[1]] : p);
+    const s = mk({ hr, extra: { lactateChecks: { end: 2 } } }); const t1 = performance.now(); runTimeline(s); endWindowStats(s); endOnlyProxy(s); const ms = performance.now() - t1;
+    check('a clock jump of a year inside the heart-rate data: quick', ms < 300, `${ms.toFixed(0)} ms`); }
+  // damaged lists in a record: nothing throws
+  { const hr = simHr({ segs: [{ until: 1800, hr: 150 }], seed: 210 }); const s = mk({ hr, lactate: [[1790, 2]] }); s.features.splice(3, 0, null); s.events.push(null); s.hrLive.splice(10, 0, null, 'x');
+    let ok = true; try { sessionMetrics(s); lactateVerdict(s); endWindowStats(s); endOnlyProxy(s); verdictZoneChange(Z, s); multiDayCurve([s]); sessionMetrics({ ...s, events: {} }); } catch (e) { ok = false; }
+    check('nulls and non-lists inside a record: nothing throws', ok); }
 }
 
 console.log(failures ? `\n${failures} FAILED` : '\nALL PASS'); process.exit(failures ? 1 : 0);

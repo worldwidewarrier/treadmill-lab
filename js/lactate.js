@@ -152,7 +152,9 @@ export function obla(stages, level = 4) {
 export function analyzeLactate(stages) {
   const st = stages.filter(s => Number.isFinite(s.x) && Number.isFinite(s.la)).sort((a, b) => a.x - b.x);
   const xs = st.map(s => s.x), hrs = st.map(s => s.hr);
-  const hrAt = x => (hrs.every(h => Number.isFinite(h)) ? interp(xs, hrs, x) : NaN);
+  // heart rate at a speed: from the points that have one; where some lack it, only between two that have it (never copied beyond them)
+  const fx = xs.filter((_, i) => Number.isFinite(hrs[i])), fh = hrs.filter(h => Number.isFinite(h));
+  const hrAt = x => hrs.every(h => Number.isFinite(h)) ? interp(xs, hrs, x) : (fx.length >= 2 && x >= fx[0] && x <= fx[fx.length - 1] ? interp(fx, fh, x) : NaN);
   const wrap = (m, r) => ({ method: m, x: r.x, la: r.la, hr: Number.isFinite(r.x) ? hrAt(r.x) : NaN, note: r.note || '' });
   const ll = lt1LogLog(st);
   const out = {

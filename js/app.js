@@ -5,8 +5,8 @@ import { Alerts } from './alerts.js';
 import { HeartRateSource } from './ble.js';
 import { ReplaySource, DemoSource, demoProfileForEngine } from './sources.js';
 import { SessionEngine, DEFAULT_PROTOCOL, DEFAULT_INTERVALS, buildStages, computeFeaturesOffline } from './session.js';
-import { analyzeSession, summarizeStages, smo2Steady, estimateOffsetMs } from './analysis.js';
-import { computeZones, sessionTargets, weeklyPlan, lt2Structure, sessionMetrics, assessRecent, sessionSummaryText, claudeSummary, lactateChecks, lactateVerdict, verdictZoneChange, multiDayCurve, endWindowStats } from './prescribe.js';
+import { analyzeSession, summarizeStages, smo2Steady, estimateOffsetMs, runTimeline, list } from './analysis.js';
+import { computeZones, sessionTargets, weeklyPlan, lt2Structure, sessionMetrics, assessRecent, sessionSummaryText, claudeSummary, lactateChecks, typedChecks, lactateVerdict, verdictZoneChange, multiDayCurve, endWindowStats } from './prescribe.js';
 import { importFile } from './importers.js';
 import { liveChart, timelineChart, stepTestChart, trendChart } from './charts.js';
 
@@ -38,7 +38,8 @@ const fmtDate = ms => { const d = new Date(ms); return `${d.getFullYear()}-${Str
 /**
  * A time as typed into the run-end field → seconds. "35:05" → 2105 · "1:02:03" → 3723 · the separator may also be . , - or a space
  * (a phone's number pad has no colon) · digits alone are read like the display without its colons: "3505" → 35:05, "10203" → 1:02:03,
- * one or two digits are minutes ("35" → 35:00) · anything else, and seconds or minutes of 60 and more → NaN
+ * one or two digits are minutes ("35" → 35:00) · "35.5" is 35:05 (dot = colon) · seconds of 60 and more, and minutes of 60 and more in
+ * the h:m:s form → NaN ("75:00" is 75 minutes) · anything else → NaN
  */
 const parseClock = txt => {
   const str = String(txt).trim(); let p;
@@ -79,19 +80,23 @@ function destroyCharts() { for (const c of A.charts) { try { c.destroy(); } catc
 function navigate(view, param = null) { A.view = view; A.param = param; destroyCharts(); render(); try { localStorage.setItem('tl.view', view); } catch (e) { /* ignore */ } window.scrollTo(0, 0); }
 async function render() {
   document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('active', b.dataset.view === A.view));
-  const v = $('#view'); const view = A.view;
+  const v = $('#view'); const view = A.view; const seq = A.renderSeq = (A.renderSeq || 0) + 1;
+  const current = () => A.renderSeq === seq; // a screen that took long to build must not paint over the tab the user went to meanwhile
   try {
-    if (A.view === 'home') v.innerHTML = await renderHome();
-    else if (A.view === 'live') { v.innerHTML = renderLive(); mountLive(); }
-    else if (A.view === 'analysis') { v.innerHTML = A.param ? '<p class="muted">…</p>' : await renderAnalysisList(); if (A.param) await renderSessionDetail(A.param); }
-    else if (A.view === 'plan') v.innerHTML = await renderPlan();
+    if (A.view === 'home') { const h = await renderHome(); if (current()) v.innerHTML = h; }
+    else if (A.view === 'live') { v.innerHTML = renderLive(); try { mountLive(); } catch (e) { console.error('live screen', e); } } // (the buttons work without the chart: Finish must stay reachable)
+    else if (A.view === 'analysis') { if (A.param) { v.innerHTML = '<p class="muted">…</p>'; await renderSessionDetail(A.param, current); } else { const h = await renderAnalysisList(); if (current()) v.innerHTML = h; } }
+    else if (A.view === 'plan') { const h = await renderPlan(); if (current()) v.innerHTML = h; }
     else if (A.view === 'settings') { v.innerHTML = renderSettings(); mountSettings(); }
-  } catch (e) {
-    // A screen that fails must not look like a frozen app: say so (with the text to report) and leave the other tabs reachable.
-    console.error('render', view, e);
-    if (A.view === view) v.innerHTML = `<div class="notice warn" id="render-error"><b>이 화면을 표시하지 못했습니다.</b> 다른 탭은 그대로 쓸 수 있고, 기록 중인 세션은 계속 기록됩니다. 아래 내용을 알려 주세요.<span class="en"><b>This screen could not be shown.</b> The other tabs still work and a running session keeps recording. Please report the text below.</span><pre class="small" style="white-space:pre-wrap;word-break:break-all;margin-top:6px">${esc(String((e && (e.stack || e.message)) || e).slice(0, 500))}</pre></div>`;
-  }
+  } catch (e) { if (current()) showRenderError(e); }
   updateConnChip();
+}
+/** A screen that fails must not look like a frozen app: say so (with the text to report) and leave a way on — the other tabs, Finish for a running session, Delete for a session that cannot be shown. */
+function showRenderError(e) {
+  console.error('render', A.view, e);
+  const running = A.engine && A.engine.state === 'running';
+  const btns = (running ? `<button class="danger" data-action="stop">${t('stop')}</button> <button class="ghost" data-action="pause">${t('pause')}</button> <button class="ghost" data-action="lactate">${t('lactate_entry')}</button>` : '') + (A.view === 'analysis' && A.param ? ` <button class="ghost danger" data-action="delete-broken" data-id="${esc(A.param)}">이 세션 삭제 <span class="en">Delete this session</span></button>` : '');
+  $('#view').innerHTML = `<div class="notice warn" id="render-error"><b>이 화면을 표시하지 못했습니다.</b> 다른 탭은 그대로 쓸 수 있고, 기록 중인 세션은 계속 기록됩니다${running ? ' — 아래 버튼으로 종료할 수 있습니다' : ''}. 아래 내용을 알려 주세요.<span class="en"><b>This screen could not be shown.</b> The other tabs still work and a running session keeps recording${running ? ' — it can be finished with the button below' : ''}. Please report the text below.</span>${btns ? `<div class="row" style="margin-top:8px">${btns}</div>` : ''}<pre class="small" style="white-space:pre-wrap;word-break:break-all;margin-top:6px">${esc(String((e && (e.stack || e.message)) || e).slice(0, 500))}</pre></div>`;
 }
 document.getElementById('nav').addEventListener('click', e => { const b = e.target.closest('button'); if (b) navigate(b.dataset.view); });
 $('#view').addEventListener('click', onViewClick);
@@ -179,7 +184,7 @@ function renderLive() {
     <div class="stats" style="margin-top:10px"><div>${tx('samples')}<b id="lv-n">0</b></div><div>RMSSD<b id="lv-rmssd">–</b></div><div>${tx('battery')}<b id="lv-batt">${A.source?.battery != null ? A.source.battery + '%' : '–'}</b></div><div>${tx('in_zone')}<b id="lv-tiz">–</b></div></div>
     <div class="card" style="margin-top:10px;padding:8px 6px 4px"><div class="chart" id="lv-chart"></div></div>
     <div class="card" style="margin-top:10px" id="lv-stages"></div>
-    <div class="row" style="margin-top:10px"><button class="compact ghost" data-action="rpe">${t('rpe_entry')}</button><button class="compact ghost" data-action="lactate">${t('lactate_entry')}</button><span class="small muted"></span><button class="compact ghost" id="lv-mute" data-action="mute">🔊</button></div>${v.mode === 'test' ? '' : '<p class="small muted" id="lv-lac-hint" style="margin-top:6px">젖산 값은 멈춘 직후, 쿨다운 전에 입력하세요 — 입력한 시각으로 달리기가 끝난 시점을 찾습니다. <span class="en">Type the lactate value right after you stop, before any cool-down: its time is used to find where the run ended.</span></p>'}`;
+    <div class="row" style="margin-top:10px"><button class="compact ghost" data-action="rpe">${t('rpe_entry')}</button><button class="compact ghost" data-action="lactate">${t('lactate_entry')}</button><button class="compact ghost" id="lv-mute" data-action="mute">🔊</button></div>${v.mode === 'test' ? '' : '<p class="small muted" id="lv-lac-hint" style="margin-top:6px">젖산 값은 멈춘 직후, 쿨다운 전에 입력하세요 — 입력한 시각으로 달리기가 끝난 시점을 찾습니다. <span class="en">Type the lactate value right after you stop, before any cool-down: its time is used to find where the run ended.</span></p>'}`;
   return html;
 }
 function mountLive() {
@@ -347,7 +352,7 @@ async function renderAnalysisList() {
   const md = multiDayCurve(await store.listSessions(), { days: 60 }); A.multiDay = md;
   if (md.points.length) {
     html += `<h2>다일 젖산 곡선 <span class="en">Multi-day lactate curve</span></h2><div class="card"><p class="small muted">일정 속도 세션의 종료 젖산을 모아 만든 곡선(최근 60일, 속도당 최신 1개, 데모 세션 제외). <span class="en">End-of-run lactate from constant-speed sessions (last 60 days, newest per speed, demo sessions excluded).</span></p>
-      <div class="table-wrap"><table><thead><tr><th>km/h</th><th>La</th><th>HR</th><th>α1</th><th>날짜</th></tr></thead><tbody>${md.points.map(p => `<tr><td>${p.x}</td><td>${p.la}</td><td>${p.unsure ? '?' : n0(p.hr)}</td><td>${p.unsure ? '?' : n2(p.alpha1)}</td><td>${fmtDate(p.date).slice(5, 10)}</td></tr>`).join('')}</tbody></table></div>${md.points.some(p => p.unsure) ? '<p class="small muted" style="margin-top:6px">? = 달리기 종료 시점이 불확실한 세션: 젖산만 곡선에 쓰고 심박은 다른 세션에서 읽습니다. 세션 화면의 검증 카드에서 종료 시각을 확정하면 채워집니다.<span class="en">? = the end of that run is uncertain: its lactate is used, its heart rate is read off the other runs. Confirm the end of the run in that session\'s verification card to fill it in.</span></p>' : ''}`;
+      <div class="table-wrap"><table><thead><tr><th>km/h</th><th>La</th><th>HR</th><th>α1</th><th>날짜</th></tr></thead><tbody>${md.points.map(p => `<tr><td>${p.x}</td><td>${p.la}</td><td>${p.unsure ? '?' : n0(p.hr)}</td><td>${p.unsure ? '?' : n2(p.alpha1)}</td><td>${fmtDate(p.date).slice(5, 10)}</td></tr>`).join('')}</tbody></table></div>${md.points.some(p => p.unsure) ? '<p class="small muted" style="margin-top:6px">? = 달리기 종료 시점이 불확실한 세션: 젖산만 곡선에 쓰고, 심박은 양옆 속도의 확실한 세션 사이에서만 읽습니다(그 밖이면 역치 심박을 내지 않음). 세션 화면의 검증 카드에서 종료 시각을 확정하면 채워집니다.<span class="en">? = the end of that run is uncertain: its lactate is used; its heart rate is read only between certain runs at speeds on either side (beyond them no threshold heart rate is given). Confirm the end of the run in that session\'s verification card to fill it in.</span></p>' : ''}`;
     if (md.analysis) { const L1 = md.analysis.lt1Primary, L2 = md.analysis.lt2Primary; html += `<div class="thr-card" style="margin-top:10px"><div class="box"><div class="small muted">LT1 (baseline+0.5)</div><div class="v">${n0(L1.hr)}<small> bpm</small></div><div class="small">${n1(L1.x)} km/h</div></div><div class="box"><div class="small muted">LT2 (ModDmax)</div><div class="v">${n0(L2.hr)}<small> bpm</small></div><div class="small">${n1(L2.x)} km/h</div></div></div><p class="small muted" style="margin-top:6px">${t('grade')} ${md.grade} · ${md.points.length}점${md.points.length < 5 ? ' — 5점 이상(젖산 범위 2 mmol/L 이상)이면 B등급' : ''}</p><button class="primary block" style="margin-top:8px" data-action="apply-multiday" ${Number.isFinite(L1.hr) && Number.isFinite(L2.hr) ? '' : 'disabled'}>${t('apply_zones')}</button>`; }
     else html += `<p class="small muted" style="margin-top:6px">${md.points.length}/3 — 서로 다른 속도 3개 이상이면 곡선을 계산합니다. <span class="en">Need ≥3 different speeds to fit the curve.</span></p>`;
     html += '</div>';
@@ -358,8 +363,9 @@ async function renderAnalysisList() {
 }
 function itemHtml(s) { const m = s.metrics || {}; return `<div class="list-item" data-action="open-session" data-id="${s.id}"><div><div class="t">${typeLabel(s.type)} · ${fmtDate(s.startedAt)}${s.final ? '' : ' · <span class="pill warn">미완료 / unfinished</span>'}</div><div class="s">${fmtClock(m.durationSec || 0)} · HR ${n0(m.meanHr)} · α1 ${n2(m.meanAlpha1)}${s.result ? ` · LT1 ${n0(s.result.lt1Hr)} / LT2 ${n0(s.result.lt2Hr)} (${esc(s.result.grade)})` : ''}${s.hasSmo2 ? ' · SmO2' : ''} · ${esc(s.sourceKind || '')}</div></div><div>›</div></div>`; }
 
-async function renderSessionDetail(id) {
-  const s = await store.getSession(id); const v = $('#view'); if (!s) { v.innerHTML = '<p>not found</p>'; return; }
+async function renderSessionDetail(id, current = () => true) {
+  const s = await store.getSession(id); const v = $('#view'); if (!current()) return; if (!s) { v.innerHTML = '<p>not found</p>'; return; }
+  for (const k of ['events', 'features', 'hrLive', 'rr', 'stages']) if (s[k] != null) s[k] = list(s[k]); // a damaged record: read what can be read
   destroyCharts(); A.detail = s;
   const r = analyzeSession(s); const m = sessionMetrics(s); const z = zonesObj(); const txt = sessionSummaryText(s, m, z, r);
   let html = `<div class="row between"><button class="compact ghost" data-action="back">‹ ${t('sessions')}</button><div class="row"><button class="compact ghost" data-action="export-csv">${t('export_csv')}</button><button class="compact ghost danger" data-action="delete-session">${t('delete')}</button></div></div>
@@ -375,7 +381,7 @@ async function renderSessionDetail(id) {
     const tail = ew.tailSec >= 20 ? [` · 그 뒤 ${fmtClock(ew.tailSec)} 더 기록됨`, ` · the recording went on for ${fmtClock(ew.tailSec)}`] : ['', ''];
     const back = s.runEndSec != null ? [' · 칸을 비우면 자동 판단으로 돌아갑니다', ' · empty the field to return to the automatic value'] : ['', ''];
     const LEAD = {
-      'no-entry': ['달리기가 끝난 무렵에 입력된 채혈 값이 없어, 심박이 달리기 수준을 떠난 시점으로 추정했습니다.', 'No lactate value was entered around the end of the run, so it is estimated at the point where the heart rate left its running level.'],
+      'no-entry': ['달리기가 끝난 시점을 가리키는 입력(채혈 값·일시정지)을 찾지 못해, 심박이 달리기 수준을 떠난 시점으로 추정했습니다.', 'Nothing logged (a lactate entry, Pause) could be tied to the end of the run, so it is estimated at the point where the heart rate left its running level.'],
       'late-entry': ['이 시점보다 6분 넘게 지나 입력된 채혈 값이 있습니다 — 그 사이가 쿨다운이었는지, 속도만 낮춰 계속 달린 것인지 심박만으로는 알 수 없습니다.', 'A lactate value was entered more than 6 min after this point — a cool-down in between, or running on at a lower speed? The heart rate alone cannot tell.'],
       'two-steps': ['채혈 값을 입력하기 전에 심박이 몇 분 간격으로 두 단계 내려갔습니다 — 첫 단계가 달리기의 끝(그 뒤는 쿨다운)인지, 속도만 낮춰 계속 달린 것인지 심박만으로는 알 수 없습니다.', 'Before the value was entered the heart rate stepped down twice, minutes apart — was the first step the end of the run (with a cool-down after it), or did you run on at a lower speed? The heart rate alone cannot tell.'],
       shallow: ['이 시점 뒤로 심박이 조금만 내려간 채 2분 넘게 지나 값이 입력됐습니다 — 멈춘 것인지 속도만 낮춘 것인지 확실하지 않습니다.', 'After this point the heart rate stayed only a little lower for more than 2 min before the value was entered — stopped, or just slower? Not certain.'],
@@ -388,12 +394,12 @@ async function renderSessionDetail(id) {
     html += `<h2>젖산 검증 <span class="en">Lactate verification</span></h2><div class="card">
       <div class="grid2"><label class="field">러닝머신 km/h<input type="number" step="0.1" id="vc-speed" value="${s.speed ?? ''}"></label><label class="field">경사 %<input type="number" step="0.5" id="vc-incline" value="${s.incline ?? ''}"></label></div>
       <label class="field" style="margin-top:8px">목적 / purpose<select id="vc-purpose"><option value="" ${!s.purpose ? 'selected' : ''}>자동 (종료 ≥ 3 → MLSS 규칙) / auto</option><option value="lt1" ${s.purpose === 'lt1' ? 'selected' : ''}>LT1 검증 / LT1 check</option><option value="mlss" ${s.purpose === 'mlss' ? 'selected' : ''}>MLSS(LT2) 검증 / MLSS check</option></select></label>
-      <div class="grid3" style="margin-top:8px"><label class="field">안정 시 / rest<input type="number" step="0.1" id="vc-rest" value="${c.rest ?? ''}"></label><label class="field">10분 / mid<input type="number" step="0.1" id="vc-mid" value="${c.mid ?? ''}"></label><label class="field">종료 / end<input type="number" step="0.1" id="vc-end" value="${c.end ?? ''}"></label></div>
+      <div class="grid3" style="margin-top:8px"><label class="field">안정 시 / rest<input type="text" inputmode="decimal" autocomplete="off" id="vc-rest" value="${c.rest ?? ''}"></label><label class="field">10분 / mid<input type="text" inputmode="decimal" autocomplete="off" id="vc-mid" value="${c.mid ?? ''}"></label><label class="field">종료 / end<input type="text" inputmode="decimal" autocomplete="off" id="vc-end" value="${c.end ?? ''}"></label></div>
       <div class="row" style="margin-top:8px;align-items:flex-end"><label class="field grow">달리기 종료 (분:초 · 3505 = 35:05) / run ended at (min:s)<input type="text" id="vc-runend" inputmode="numeric" autocomplete="off" value="${fmtClock(endSec)}"></label>${ew.sure ? '' : '<button class="compact" id="vc-runend-ok">확정 <span class="en">confirm</span></button>'}</div>
       <p class="small muted" id="vc-runend-how" style="margin-top:4px">${how[0]}${tail[0]}${back[0]} <span class="en">${how[1]}${tail[1]}${back[1]}</span></p>
       ${unsure}
       <p class="small muted" id="vc-last5" style="margin-top:6px">${lastLbl[0]}${est[0]}: 심박 ${n0(ew.hr)} bpm · α1 ${n2(ew.alpha1)} <span class="en">${lastLbl[1]}${est[1]}: HR ${n0(ew.hr)} · α1 ${n2(ew.alpha1)}</span></p>
-      ${(() => { const ss = smo2Steady(s); if (!ss) return ''; const st = ss.steady == null ? '' : ss.steady ? '안정 상태 / steady' : '비정상 상태 — 계속 하락 / not steady — still falling'; return `<div class="notice ${ss.steady === false || ss.contact === 'low' ? 'warn' : ''}" style="margin-top:6px"><b>SmO₂</b> 5–10분 ${n1(ss.earlyMean)} % → 마지막 5분 ${n1(ss.endMean)} % (Δ ${Number.isFinite(ss.drift) ? (ss.drift > 0 ? '+' : '') + ss.drift.toFixed(1) : '–'}), 끝 10분 기울기 ${Number.isFinite(ss.slopeEnd) ? ss.slopeEnd.toFixed(2) : '–'} %/min → ${st}. THb ${n1(ss.thbMean)}${ss.contact === 'low' ? ' ⚠ 접촉 불량 의심 / poor contact?' : ''}<span class="en">SmO₂ 5–10 min ${n1(ss.earlyMean)} % → last 5 min ${n1(ss.endMean)} %, end slope ${Number.isFinite(ss.slopeEnd) ? ss.slopeEnd.toFixed(2) : '–'} %/min → ${ss.steady == null ? '' : ss.steady ? 'steady' : 'not steady'}</span></div>`; })()}
+      ${(() => { const ss = smo2Steady(s); if (!ss) return ''; const st = (ss.steady == null ? '' : ss.steady ? '안정 상태 / steady' : '비정상 상태 — 계속 하락 / not steady — still falling') + (ew.sure ? '' : ' (추정 구간 / estimated window)'); return `<div class="notice ${ss.steady === false || ss.contact === 'low' ? 'warn' : ''}" style="margin-top:6px"><b>SmO₂</b> 5–10분 ${n1(ss.earlyMean)} % → 마지막 5분 ${n1(ss.endMean)} % (Δ ${Number.isFinite(ss.drift) ? (ss.drift > 0 ? '+' : '') + ss.drift.toFixed(1) : '–'}), 끝 10분 기울기 ${Number.isFinite(ss.slopeEnd) ? ss.slopeEnd.toFixed(2) : '–'} %/min → ${st}. THb ${n1(ss.thbMean)}${ss.contact === 'low' ? ' ⚠ 접촉 불량 의심 / poor contact?' : ''}<span class="en">SmO₂ 5–10 min ${n1(ss.earlyMean)} % → last 5 min ${n1(ss.endMean)} %, end slope ${Number.isFinite(ss.slopeEnd) ? ss.slopeEnd.toFixed(2) : '–'} %/min → ${ss.steady == null ? '' : ss.steady ? 'steady' : 'not steady'}</span></div>`; })()}
       ${vd ? `<div class="notice ${vd.level === 'ok' ? '' : 'warn'}" style="margin-top:6px"><span class="ko">${esc(vd.ko)}</span><span class="en">${esc(vd.en)}</span></div>${(() => { const ch = verdictZoneChange(A.settings.zones, s, vd); return ch ? `<button class="compact" style="margin-top:8px" data-action="apply-verdict">존에 반영: ${esc(ch.ko)} <span class="en">Apply to zones</span></button>` : `<p class="small muted" style="margin-top:6px">현재 존(LT1 ${A.settings.zones?.lt1Hr ?? '–'} bpm @ ${A.settings.zones?.lt1Speed ?? '–'} · LT2 ${A.settings.zones?.lt2Hr ?? '–'} @ ${A.settings.zones?.lt2Speed ?? '–'})과 모순되지 않음 — 변경 없음 <span class="en">Consistent with current zones — nothing to change</span></p>`; })()}` : `<p class="small muted">종료 젖산을 입력하면 LT1/LT2 판정이 나옵니다. 세션 중 「젖산 입력」으로 기록한 값은 자동 배치됩니다(멈춘 뒤 입력한 값 = 종료, 입력 뒤 다시 달렸으면 10분 값). <span class="en">Enter the end lactate to get a verdict; values logged during the session are placed automatically (typed after the stop = end; running resumed after it = the 10-min value).</span></p>`}
     </div>`;
   }
@@ -415,30 +421,50 @@ async function renderSessionDetail(id) {
   // FatMaxxer comparison (features import overlapping this session)
   const fm = A.imports.find(i => i.source === 'fatmaxxer-features' && i.features?.some(f => f.t >= s.startedAt && f.t <= (s.endedAt || Infinity)));
   if (fm && s.features?.length) { const pairs = []; for (const f of fm.features) { if (f.t < s.startedAt || f.t > s.endedAt) continue; const mine = s.features.reduce((best, x) => Math.abs(x.t - f.t) < Math.abs(best.t - f.t) ? x : best, s.features[0]); if (Math.abs(mine.t - f.t) < 6000 && Number.isFinite(mine.alpha1) && Number.isFinite(f.alpha1)) pairs.push([f.alpha1, mine.alpha1]); } if (pairs.length) { const mad = pairs.reduce((a, p) => a + Math.abs(p[0] - p[1]), 0) / pairs.length; html += `<div class="card" style="margin-top:10px"><h3>FatMaxxer α1 비교 <span class="en">comparison</span></h3><p class="small">${pairs.length}개 시점, 평균 절대차 <b class="mono">${mad.toFixed(3)}</b> / ${pairs.length} points, mean |Δ| ${mad.toFixed(3)}</p></div>`; } }
+  if (!current()) return;
   v.innerHTML = html;
-  // charts
+  // charts (a chart that cannot be drawn must not take the card and its buttons with it)
+  try {
   const el = $('#tl-chart'); if (el && s.features?.length) { const t0 = s.startedAt; const feats = s.features; const ts = feats.map(f => (f.t - t0) / 1000); const hr = feats.map(f => f.hrInst > 0 ? f.hrInst : null); const a1 = feats.map(f => Number.isFinite(f.alpha1) ? f.alpha1 : null); let sm = null; if (s.smo2?.series?.length) { const off = s.smo2.offsetMs || 0; const ser = s.smo2.series; sm = ts.map(tt => { const target = t0 + tt * 1000 - off; let lo = 0, hi = ser.length - 1; while (lo < hi) { const mid = (lo + hi) >> 1; if (ser[mid][0] < target) lo = mid + 1; else hi = mid; } const p = ser[lo]; return p && Math.abs(p[0] - target) < 3000 ? p[1] : null; }); } const band = s.targets ? [s.targets.hrLo, s.targets.hrHi] : null; A.charts.push(timelineChart(el, { ts, hr, a1, smo2: sm, band })); }
   else if (el && s.hrLive?.length) { const t0 = s.startedAt; const step = Math.max(1, Math.floor(s.hrLive.length / 600)); const pts = s.hrLive.filter((_, i) => i % step === 0); A.charts.push(timelineChart(el, { ts: pts.map(p => (p[0] - t0) / 1000), hr: pts.map(p => p[1]), a1: pts.map(() => null) })); }
   const sc = $('#step-chart'); if (sc && r.rows.length) { const rows = r.rows.filter(x => Number.isFinite(x.speed)); const marks = []; if (r.lactate && Number.isFinite(r.lactate.lt1Primary.x)) marks.push({ x: r.lactate.lt1Primary.x, label: 'LT1', color: getComputedStyle(document.documentElement).getPropertyValue('--c-la') }); if (r.lactate && Number.isFinite(r.lactate.lt2Primary.x)) marks.push({ x: r.lactate.lt2Primary.x, label: 'LT2', color: getComputedStyle(document.documentElement).getPropertyValue('--c-la') }); if (r.hrv.hrvt1) marks.push({ x: r.hrv.hrvt1.speed, label: 'HRVT1', row: 1, color: getComputedStyle(document.documentElement).getPropertyValue('--c-a1') }); if (r.hrv.hrvt2) marks.push({ x: r.hrv.hrvt2.speed, label: 'HRVT2', row: 1, color: getComputedStyle(document.documentElement).getPropertyValue('--c-a1') }); if (r.smo2.bp2) marks.push({ x: r.smo2.bp2.speed, label: 'BP2', row: 2, color: getComputedStyle(document.documentElement).getPropertyValue('--c-smo2') }); A.charts.push(stepTestChart(sc, { speeds: rows.map(x => x.speed), lactate: rows.map(x => Number.isFinite(x.lactate) ? x.lactate : null), a1: rows.map(x => Number.isFinite(x.alpha1) ? x.alpha1 : null), smo2: rows.map(x => Number.isFinite(x.smo2) ? x.smo2 : null), hr: rows.map(x => Number.isFinite(x.hr) ? x.hr : null), marks })); }
+  } catch (e) { console.error('session charts', e); }
   // stage edits
-  const tbl = $('#stage-table'); if (tbl) tbl.addEventListener('change', async e => { const inp = e.target; const tr = inp.closest('tr'); if (!tr) return; const idx = +tr.dataset.idx; const st = s.stages.find(x => x.idx === idx); if (!st) return; const val = inp.value === '' ? null : +inp.value; st[inp.dataset.f] = val; if (s.type === 'test') s.result = resultFrom(analyzeSession(s)); await store.putSession(s); await renderSessionDetail(id); });
-  const vp = document.getElementById('vc-purpose'); if (vp) vp.onchange = async () => { s.purpose = vp.value || null; await store.putSession(s); destroyCharts(); await renderSessionDetail(s.id); };
-  for (const [id, key] of [['vc-speed', 'speed'], ['vc-incline', 'incline']]) { const el = document.getElementById(id); if (el) el.onchange = async () => { s[key] = el.value === '' ? null : +el.value; await store.putSession(s); destroyCharts(); await renderSessionDetail(id === 'vc-speed' ? s.id : s.id); }; }
+  const tbl = $('#stage-table'); if (tbl) tbl.addEventListener('change', async e => { const inp = e.target; const tr = inp.closest('tr'); if (!tr) return; const idx = +tr.dataset.idx; const st = s.stages.find(x => x.idx === idx); if (!st) return; const val = inp.value === '' ? null : +inp.value; st[inp.dataset.f] = val; if (s.type === 'test') s.result = resultFrom(analyzeSession(s)); await store.putSession(s); await refreshDetail(s.id); });
+  const vp = document.getElementById('vc-purpose'); if (vp) vp.onchange = async () => { s.purpose = vp.value || null; await store.putSession(s); await refreshDetail(s.id); };
+  for (const [id, key] of [['vc-speed', 'speed'], ['vc-incline', 'incline']]) { const el = document.getElementById(id); if (el) el.onchange = async () => { s[key] = el.value === '' ? null : +el.value; await store.putSession(s); await refreshDetail(s.id); }; }
   // A field typed here is final for that field alone (also when emptied); the other two keep following what was logged during the session.
-  for (const [id, key] of [['vc-rest', 'rest'], ['vc-mid', 'mid'], ['vc-end', 'end']]) { const el = document.getElementById(id); if (el) el.onchange = async () => { const v = el.value === '' ? null : +el.value; s.lactateChecks = { ...(s.lactateChecks || {}), [key]: Number.isFinite(v) ? v : null }; s.metrics = sessionMetrics(s); await store.putSession(s); destroyCharts(); await renderSessionDetail(s.id); }; }
+  for (const [id, key] of [['vc-rest', 'rest'], ['vc-mid', 'mid'], ['vc-end', 'end']]) { const el = document.getElementById(id); if (el) el.onchange = async () => { const raw = el.value.trim().replace(',', '.'); const v = raw === '' ? null : Number(raw);
+    if (v != null && !(v >= 0.3 && v <= 25)) { toast('0.3–25 mmol/L', 3000); el.value = lactateChecks(s)[key] ?? ''; return; } // (the meter's range; a typo must not become a verdict)
+    s.lactateChecks = { ...typedChecks(s), [key]: Number.isFinite(v) ? v : null }; s.lactateChecksV = 2; s.metrics = sessionMetrics(s); await store.putSession(s); await refreshDetail(s.id); }; }
   // End of the run: a time typed here (or the estimate, confirmed) replaces the automatic one; an empty field returns to it.
-  const setRunEnd = async sec => { if (sec == null) delete s.runEndSec; else s.runEndSec = sec; s.metrics = sessionMetrics(s); await store.putSession(s); destroyCharts(); await renderSessionDetail(s.id); };
+  const setRunEnd = async sec => { if (sec == null) delete s.runEndSec; else s.runEndSec = sec; s.metrics = sessionMetrics(s); await store.putSession(s); await refreshDetail(s.id); };
   const re = document.getElementById('vc-runend'); if (re) re.onchange = async () => {
     if (re.value.trim() === '') { await setRunEnd(null); return; }
     const sec = parseClock(re.value); const w = endWindowStats(s, 300); const rec = Math.round((w.endT - s.startedAt) / 1000 + w.tailSec);
-    if (!(sec > 0) || sec > rec) { toast(`0:01 – ${fmtClock(rec)} 사이의 시각을 입력하세요 (예: 35:05 = 3505 = 35.05) / enter a time in that range`, 4000); re.value = fmtClock((w.endT - s.startedAt) / 1000); return; }
+    const first = Math.floor((runTimeline(s).start - s.startedAt) / 1000) + 1; // (an LT2 session: after the start of the last rep)
+    if (!(sec >= first) || sec > rec) { toast(`${fmtClock(first)} – ${fmtClock(rec)} 사이의 시각을 입력하세요 (예: 35:05 = 3505 = 35.05) / enter a time in that range`, 4000); re.value = fmtClock((w.endT - s.startedAt) / 1000); return; }
     await setRunEnd(sec);
   };
   const reOk = document.getElementById('vc-runend-ok'); if (reOk) reOk.onclick = async () => { const w = endWindowStats(s, 300); await setRunEnd(Math.round((w.endT - s.startedAt) / 1000)); };
-  const off = $('#smo2-offset'); if (off) off.onchange = async () => { s.smo2.offsetMs = (+off.value || 0) * 1000; s.smo2.alignment = { ...(s.smo2.alignment || {}), method: 'manual', ok: true, mad: s.smo2.alignment?.mad ?? NaN, estimatedMs: s.smo2.alignment?.estimatedMs ?? s.smo2.offsetMs }; await store.putSession(s); destroyCharts(); await renderSessionDetail(id); };
+  const off = $('#smo2-offset'); if (off) off.onchange = async () => { s.smo2.offsetMs = (+off.value || 0) * 1000; s.smo2.alignment = { ...(s.smo2.alignment || {}), method: 'manual', ok: true, mad: s.smo2.alignment?.mad ?? NaN, estimatedMs: s.smo2.alignment?.estimatedMs ?? s.smo2.offsetMs }; await store.putSession(s); await refreshDetail(s.id); };
   // The numbers kept with a session (the list shows them) were worked out by the version that recorded it: once the session has been
   // opened they are the ones shown here.
   if (s.final && JSON.stringify(s.metrics ?? null) !== JSON.stringify(m)) { s.metrics = m; try { await store.putSession(s); } catch (e) {} }
+}
+/**
+ * Show the session again after an edit in it. Not while the user is already typing in another field of the card: rebuilding the card
+ * would take that field away under the finger (the typing lost, or half of it stored) — then once that field is left.
+ */
+document.addEventListener('change', e => { A.lastChanged = e.target; }, true);
+function refreshDetail(id) {
+  return new Promise(res => setTimeout(async () => {
+    const ae = document.activeElement;
+    if (ae && ae !== A.lastChanged && ae.tagName === 'INPUT' && ae.closest('#view') && ae.isConnected) { if (!A.refreshWait) { A.refreshWait = true; ae.addEventListener('blur', () => { A.refreshWait = false; refreshDetail(id); }, { once: true }); } res(); return; }
+    if (A.view !== 'analysis' || A.param !== id) { res(); return; }
+    try { destroyCharts(); await renderSessionDetail(id); } catch (e) { showRenderError(e); }
+    res();
+  }, 0));
 }
 async function applyZonesFromDetail() {
   const s = A.detail; if (!s) return; const r = analyzeSession(s); const tri = r.tri; if (!tri.lt1 || !tri.lt2) return;
@@ -510,8 +536,10 @@ function buildSmo2(sess, imp, { overlap = true } = {}) {
 }
 function alignmentText(smo2) {
   const a = smo2?.alignment; if (!a) return '정렬: 시작 시각 기준 (심박 없음 — 수동 확인) / aligned by clock only (no HR to cross-check)';
-  if (!a.ok) return `정렬 불확실: 심박 불일치 ${a.mad.toFixed(1)} bpm — 보정값 확인 / alignment uncertain (HR mismatch ${a.mad.toFixed(1)} bpm) — check the offset`;
-  return `심박 교차검증 ✓ 오차 ${a.mad.toFixed(2)} bpm, 추정 ${Math.round(a.estimatedMs / 1000)} s / HR-verified, ${a.mad.toFixed(2)} bpm, est. ${Math.round(a.estimatedMs / 1000)} s`;
+  const f = (v, d) => Number.isFinite(v) ? v.toFixed(d) : '–'; // (a backup turns NaN into null)
+  if (a.method === 'manual') return '정렬: 수동 보정 / aligned by hand';
+  if (!a.ok) return `정렬 불확실: 심박 불일치 ${f(a.mad, 1)} bpm — 보정값 확인 / alignment uncertain (HR mismatch ${f(a.mad, 1)} bpm) — check the offset`;
+  return `심박 교차검증 ✓ 오차 ${f(a.mad, 2)} bpm, 추정 ${Number.isFinite(a.estimatedMs) ? Math.round(a.estimatedMs / 1000) : '–'} s / HR-verified, ${f(a.mad, 2)} bpm, est. ${Number.isFinite(a.estimatedMs) ? Math.round(a.estimatedMs / 1000) : '–'} s`;
 }
 async function autoAttach(sess) { if (sess.smo2) return; const imps = await store.listImports(); for (const i of imps) { if (!i.smo2Series?.length) continue; const ov = Math.min(i.endedAt, sess.endedAt) - Math.max(i.startedAt, sess.startedAt); if (ov > 0.5 * (i.endedAt - i.startedAt)) { sess.smo2 = buildSmo2(sess, i); await store.putSession(sess); return; } } }
 $('#file-input').addEventListener('change', async e => { const files = [...e.target.files]; e.target.value = ''; if (A.pendingReplayPick) { A.pendingReplayPick = false; if (files[0]) { try { const imp = await importFile(files[0]); if (!imp.rr?.length) throw new Error('no RR'); A.live.replay = { rr: imp.rr, filename: files[0].name, durationSec: imp.durationSec }; toast(`${imp.rr.length} RR`); } catch (err) { toast('RR 파일이 아닙니다 / not an RR file'); } render(); } return; } await handleFiles(files); });
@@ -602,6 +630,7 @@ async function onViewClick(e) {
     case 'mute': if (A.alerts) { A.alerts.muted = !A.alerts.muted; b.textContent = A.alerts.muted ? '🔇' : '🔊'; } break;
     case 'open-session': navigate('analysis', b.dataset.id); break;
     case 'back': navigate('analysis'); break;
+    case 'delete-broken': { const id = b.dataset.id; confirmBox(t('delete') + '?', async () => { await store.deleteSession(id); await refreshLists(); navigate('analysis'); }); break; }
     case 'delete-session': confirmBox(t('delete') + '?', async () => { await store.deleteSession(A.detail.id); await refreshLists(); navigate('analysis'); }); break;
     case 'delete-import': e.stopPropagation(); confirmBox(t('delete') + '?', async () => { await store.deleteImport(b.dataset.id); await refreshLists(); render(); }); break;
     case 'import-detail': { const i = await store.getImport(b.dataset.id); modal(`<h3>${esc(i.filename)}</h3><dl class="kv"><dt>source</dt><dd>${esc(i.source)}</dd><dt>start</dt><dd>${fmtDate(i.startedAt)}</dd><dt>duration</dt><dd>${fmtClock(i.durationSec)}</dd>${i.meta?.position ? `<dt>position</dt><dd>${esc(i.meta.position)}</dd>` : ''}${i.smo2Series ? `<dt>SmO2 pts</dt><dd>${i.smo2Series.length}</dd>` : ''}${i.features ? `<dt>features</dt><dd>${i.features.length}</dd>` : ''}</dl><p class="small muted" style="margin-top:8px">세션 상세에서 「SmO2 파일 붙이기」로 연결하세요. / Attach from a session's detail view.</p>`); break; }
