@@ -48,6 +48,15 @@ const active = () => locks.filter(s => !s.released).length;
   check('…last one "on" → exactly one held', active() === 1 && a.wakeLock !== null, `${active()} active`);
   await a.keepAwake(false);
 }
+{ // two opposite wishes in the same instant, the first of which finds nothing to do (the worker has had its last look already)
+  locks.length = 0; const a = new Alerts(); await a.keepAwake(true);
+  a.keepAwake(true); const off = a.keepAwake(false); check('held, then "on" and "off" in the same instant → released', (await off) === true && active() === 0 && a.wakeLock === null, `${active()} active`); await sleep(40);
+  check('…and it stays released', active() === 0 && a.wakeLock === null);
+  a.keepAwake(false); const on = a.keepAwake(true); check('nothing held, then "off" and "on" in the same instant → held', (await on) === true && active() === 1 && a.wakeLock !== null, `${active()} active`);
+  await a.keepAwake(false);
+  locks.length = 0; refuse = true; const b = new Alerts(); const t0 = Date.now(); const r = await b.keepAwake(true); refuse = false;
+  check('a refused request is not asked for again and again in one call', r === false && Date.now() - t0 < 40, `${Date.now() - t0} ms`);
+}
 { // a phone without the Wake Lock API
   const saved = Object.getOwnPropertyDescriptor(globalThis.navigator, 'wakeLock'); Object.defineProperty(globalThis.navigator, 'wakeLock', { value: undefined, configurable: true });
   const a = new Alerts(); check('no Wake Lock API → false for on, true for off, no error', (await a.keepAwake(true)) === false && (await a.keepAwake(false)) === true);

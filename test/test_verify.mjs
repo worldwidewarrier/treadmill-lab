@@ -3,9 +3,10 @@ import { SessionEngine } from '../js/session.js';
 import { DemoSource, demoProfileForEngine } from '../js/sources.js';
 let failures = 0; const check = (n, c, d = '') => { console.log((c ? 'PASS ' : 'FAIL ') + n + (d ? '  ' + d : '')); if (!c) failures++; };
 const now = Date.now();
+// (the engine logs the phase at the start; an LT2 record without a phase log is never taken for one steady run)
 const mk = (type, speed, { rest = null, mid = null, end = null, hr = 140, daysAgo = 1, dur = 1800 } = {}) => {
   const t0 = now - daysAgo * 86400000; const hrLive = []; for (let i = 0; i < dur; i++) hrLive.push([t0 + i * 1000, hr]);
-  const events = []; if (rest != null) events.push({ t: t0 + 30000, type: 'lactate', value: rest }); if (mid != null) events.push({ t: t0 + 600000, type: 'lactate', value: mid }); if (end != null) events.push({ t: t0 + dur * 1000 - 60000, type: 'lactate', value: end });
+  const events = [{ t: t0, type: 'phase', phase: 'work' }]; if (rest != null) events.push({ t: t0 + 30000, type: 'lactate', value: rest }); if (mid != null) events.push({ t: t0 + 600000, type: 'lactate', value: mid }); if (end != null) events.push({ t: t0 + dur * 1000 - 60000, type: 'lactate', value: end });
   return { id: type + speed + daysAgo, type, final: true, startedAt: t0, endedAt: t0 + dur * 1000, speed, incline: 1, hrLive, features: [], events };
 };
 // checks from events by timing

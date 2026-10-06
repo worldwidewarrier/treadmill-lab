@@ -32,19 +32,26 @@ export class Alerts {
   async keepAwake(on) {
     this.wantAwake = !!on;
     if (on && !(typeof navigator !== 'undefined' && navigator.wakeLock)) return false;
-    if (!this.wakeBusy) this.wakeBusy = this.settleWake().then(() => { this.wakeBusy = null; }, () => { this.wakeBusy = null; });
-    await this.wakeBusy;
+    // One worker at a time. It may have had its last look just before this wish arrived (two calls in the same instant, the first
+    // finding nothing to do): so look again until the lock agrees with the latest wish — unless the system refused the request.
+    for (let i = 0; i < 3; i++) {
+      if (!this.wakeBusy) { const w = this.settleWake(); this.wakeBusy = w; const clear = () => { if (this.wakeBusy === w) this.wakeBusy = null; }; w.then(clear, clear); }
+      let refused = false; try { refused = await this.wakeBusy; } catch (e) { /* the worker never throws; nothing to do if it did */ }
+      if (refused || (this.wantAwake ? !!this.wakeLock : !this.wakeLock)) break;
+    }
     return this.wantAwake ? !!this.wakeLock : !this.wakeLock;
   }
+  /** Brings the lock into line with the wish, re-reading the wish after every wait. → true when the system refused a request. */
   async settleWake() {
-    for (let i = 0; i < 8; i++) { // re-read the wish after every await; 8 rounds is far more than a burst of presses needs
+    for (let i = 0; i < 8; i++) { // 8 rounds is far more than a burst of presses needs
       if (this.wantAwake && !this.wakeLock) {
-        let lock; try { lock = await navigator.wakeLock.request('screen'); } catch (e) { return; } // refused (battery saver, page hidden): the next call asks again
+        let lock; try { lock = await navigator.wakeLock.request('screen'); } catch (e) { return true; } // refused (battery saver, page hidden): the next call asks again
         if (!this.wantAwake) { try { await lock.release(); } catch (e) { /* already gone */ } continue; } // switched off while the request was on its way
         this.wakeLock = lock; lock.addEventListener('release', () => { if (this.wakeLock === lock) this.wakeLock = null; }); // the system takes it back when the page is hidden
       } else if (!this.wantAwake && this.wakeLock) {
         const lock = this.wakeLock; this.wakeLock = null; try { await lock.release(); } catch (e) { /* already gone */ }
-      } else return;
+      } else return false;
     }
+    return false;
   }
 }

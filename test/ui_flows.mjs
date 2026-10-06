@@ -24,6 +24,7 @@ await page.click('[data-action=start]'); await page.waitForSelector('#lv-zone');
 await page.waitForTimeout(6000); // ≈6 min of data
 const zoneCls = await page.getAttribute('#lv-zone', 'class'); const zoneTxt = await page.textContent('#lv-zone-text');
 check('LT1 zone banner shows a state', /in|above|below/.test(zoneCls), zoneCls + ' ' + zoneTxt);
+check('live view (not a step test) says when to type the lactate value', /멈춘 직후/.test(await page.evaluate(() => document.getElementById('lv-lac-hint')?.textContent || '')));
 await shot('20-lt1-live');
 await page.click('[data-action=stop]'); await page.click('.modal [data-x=yes]'); await page.waitForSelector('#tl-chart .uplot', { timeout: 10000 });
 const m1 = await page.evaluate(() => TL.detail.metrics);
