@@ -1,4 +1,4 @@
-import { lactateChecks, lactateVerdict, multiDayCurve, endWindowStats } from '../js/prescribe.js';
+import { lactateChecks, lactateVerdict, multiDayCurve, endWindowStats, setRestBaseline } from '../js/prescribe.js';
 import { SessionEngine } from '../js/session.js';
 import { DemoSource, demoProfileForEngine } from '../js/sources.js';
 let failures = 0; const check = (n, c, d = '') => { console.log((c ? 'PASS ' : 'FAIL ') + n + (d ? '  ' + d : '')); if (!c) failures++; };
@@ -78,4 +78,15 @@ check('continuous test: stages contiguous', sess.stages.slice(1).every((st, i) =
   const g = verdictZoneChange({ lt1Hr: 146, lt1Speed: 9.0, lt2Hr: 160, lt2Speed: 11 }, run(9.0, 146, 2.8));
   check('LT1 high at 9.0/146 with zones at 9.0/146 → cap to 8.5 / 141', g && g.zones.lt1Speed === 8.5 && g.zones.lt1Hr === 141);
 }
+// resting baseline from Settings: used only when the session has no rest value of its own
+{ setRestBaseline(0.8);
+  const a = lactateVerdict(mk('lt1', 8.5, { end: 1.9 }));
+  check('baseline 0.8, end 1.9, no rest in the session: borderline (rise 1.1 > 1.0), said so', a.level === 'near' && /baseline 0\.8/.test(a.en) && /기준 안정 시 0\.8 대비 \+1\.1/.test(a.ko), a.en);
+  const b = lactateVerdict(mk('lt1', 8.5, { end: 1.8 }));
+  check('baseline 0.8, end 1.8: below LT1', b.level === 'ok' && /\+1\.0 over the resting baseline 0\.8/.test(b.en), b.en);
+  const c2 = lactateVerdict(mk('lt1', 8.5, { rest: 1.2, end: 1.9 }));
+  check('the session\'s own rest value wins over the baseline', c2.level === 'ok' && /over rest/.test(c2.en), c2.en);
+  setRestBaseline(null); const d = lactateVerdict(mk('lt1', 8.5, { end: 1.9 }));
+  check('no baseline: as before (end ≤ 2.0 → below LT1)', d.level === 'ok');
+  setRestBaseline(9); check('an implausible baseline is ignored', lactateVerdict(mk('lt1', 8.5, { end: 1.9 })).level === 'ok'); setRestBaseline(null); }
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL PASS'); process.exit(failures ? 1 : 0);

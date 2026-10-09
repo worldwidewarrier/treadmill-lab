@@ -3,6 +3,9 @@ import { analyzeLactate, interp } from './lactate.js';
 import { list, smo2Steady, runTimeline, inStop, alphaTainted, runWindowStart, runWindowEnd, stoppedMs } from './analysis.js';
 const r1 = v => Math.round(v * 10) / 10;
 const mean = a => a.length ? a.reduce((s, v) => s + v, 0) / a.length : NaN;
+/** Resting lactate measured on its own (Settings): used by the LT1 verdict when a session has no rest value of its own. */
+let REST_BASELINE = null;
+export function setRestBaseline(v) { REST_BASELINE = Number.isFinite(v) && v >= 0.3 && v <= 4 ? v : null; }
 /** Do the samples [[t, …], …] span at least `ms`? */
 const covers = (pts, ms) => { let a = Infinity, b = -Infinity; for (const p of pts) { if (p[0] < a) a = p[0]; if (p[0] > b) b = p[0]; } return b - a >= ms; };
 /** Length of the α1 window the session was recorded with: an α1 value stamped t is made of the beats of [t − window, t]. */
@@ -149,7 +152,7 @@ const RUN_END_HOW = { sample: 'heart-rate drop before the lactate entry', pause:
 export function claudeSummary({ profile, zones, session, metrics, analysis, plan }) {
   const L = [];
   L.push(`# Treadmill Lab summary (${new Date().toISOString().slice(0, 10)})`);
-  if (profile) L.push(`Athlete: age ${profile.age ?? '?'}, resting HR ${profile.restHr ?? '?'}, max HR ${profile.maxHr ?? '?'}${profile.appVersion ? ` (app v${profile.appVersion})` : ''}`);
+  if (profile) L.push(`Athlete: age ${profile.age ?? '?'}, resting HR ${profile.restHr ?? '?'}${Number.isFinite(profile.restLactate) ? `, resting lactate ${profile.restLactate} mmol/L` : ''}, max HR ${profile.maxHr ?? '?'}${profile.appVersion ? ` (app v${profile.appVersion})` : ''}`);
   if (zones) L.push(`Thresholds: LT1 ${Math.round(zones.lt1Hr)} bpm @ ${zones.lt1Speed ?? '?'} km/h; LT2 ${Math.round(zones.lt2Hr)} bpm @ ${zones.lt2Speed ?? '?'} km/h${zones.grade ? ` (grade ${zones.grade})` : ''}${zones.updatedAt ? `, set ${new Date(zones.updatedAt).toISOString().slice(0, 10)}` : ''}`);
   if (session) {
     L.push(`Session: ${session.type}, ${new Date(session.startedAt).toLocaleString()}, ${Math.round((metrics?.durationSec || 0) / 60)} min, source ${session.sourceKind}`);
@@ -276,7 +279,10 @@ function intervalVerdict(c, spTxt, delta) {
 function verdictCore(session, c, isMlss) {
   const sp = session.speed;
   const spTxt = Number.isFinite(sp) ? ` @ ${sp} km/h` : '';
-  const rise = c.rest != null ? c.end - c.rest : null; const delta = c.mid != null ? c.end - c.mid : null;
+  // the rest value of this session, else the resting baseline from Settings (measured on its own, under the sampling rules)
+  const restUsed = c.rest != null ? c.rest : REST_BASELINE; const fromBase = c.rest == null && restUsed != null;
+  const rise = restUsed != null ? c.end - restUsed : null; const delta = c.mid != null ? c.end - c.mid : null;
+  const riseKo = rise != null ? ` (${fromBase ? `기준 안정 시 ${restUsed} 대비` : '안정 시'} ${rise >= 0 ? '+' : ''}${rise.toFixed(1)})` : '', riseEn = rise != null ? ` (${rise >= 0 ? '+' : ''}${rise.toFixed(1)} over ${fromBase ? `the resting baseline ${restUsed}` : 'rest'})` : '';
   const bouts = session.type === 'test' ? 1 : runTimeline(session).bouts;
   if (bouts === 0) return { level: 'near', adjust: null, intervals: true, ko: `워밍업 중에 끝난 세션입니다 — 젖산 ${c.end}은 기록만 하고 판정하지 않습니다.`, en: `The session ended in the warm-up — lactate ${c.end} is kept on record, no verdict.` };
   if (bouts > 1) return intervalVerdict(c, spTxt, delta);
@@ -301,9 +307,9 @@ function verdictCore(session, c, isMlss) {
   // LT1 / easy runs
   const tooHigh = c.end > 2.5 || (rise != null && rise > 1.5);
   const border = !tooHigh && (c.end > 2.0 || (rise != null && rise > 1.0));
-  if (tooHigh) return { level: 'high', adjust: { lt1Hr: -4 }, ko: `종료 젖산 ${c.end}${rise != null ? ` (안정 시 +${rise.toFixed(1)})` : ''} — LT1 위${spTxt}. 목표 심박 −4 bpm 후 재검증.`, en: `End lactate ${c.end}${rise != null ? ` (+${rise.toFixed(1)} over rest)` : ''} — above LT1${spTxt}. Target HR −4 bpm, then verify again.` };
-  if (border) return { level: 'near', adjust: { lt1Hr: -2 }, ko: `종료 젖산 ${c.end} — LT1 경계${spTxt}. 목표 심박 −2 bpm.`, en: `End lactate ${c.end} — borderline LT1${spTxt}. Target HR −2 bpm.` };
-  return { level: 'ok', adjust: null, ko: `종료 젖산 ${c.end}${rise != null ? ` (안정 시 +${rise.toFixed(1)})` : ''} — LT1 아래 확인${spTxt}.`, en: `End lactate ${c.end}${rise != null ? ` (+${rise.toFixed(1)} over rest)` : ''} — below LT1 confirmed${spTxt}.` };
+  if (tooHigh) return { level: 'high', adjust: { lt1Hr: -4 }, ko: `종료 젖산 ${c.end}${riseKo} — LT1 위${spTxt}. 목표 심박 −4 bpm 후 재검증.`, en: `End lactate ${c.end}${riseEn} — above LT1${spTxt}. Target HR −4 bpm, then verify again.` };
+  if (border) return { level: 'near', adjust: { lt1Hr: -2 }, ko: `종료 젖산 ${c.end}${riseKo} — LT1 경계${spTxt}. 목표 심박 −2 bpm.`, en: `End lactate ${c.end}${riseEn} — borderline LT1${spTxt}. Target HR −2 bpm.` };
+  return { level: 'ok', adjust: null, ko: `종료 젖산 ${c.end}${riseKo} — LT1 아래 확인${spTxt}.`, en: `End lactate ${c.end}${riseEn} — below LT1 confirmed${spTxt}.` };
 }
 /**
  * Zone change proposed by a verification verdict, using the run's own speed and steady-state HR.

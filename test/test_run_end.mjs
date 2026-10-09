@@ -47,6 +47,8 @@ function mk({ hr, type = 'free', speed = 10.5, purpose, lactate = [], rpe = [], 
   return s;
 }
 const rel = (s, t) => (t - s.startedAt) / 1000;
+/** The same session moved to yesterday (the multi-day curve takes the last 60 days only), every time stamp shifted alike. */
+const recent = s => { const d = Date.now() - 86400000 - s.startedAt; return { ...s, id: s.id + 'r', startedAt: s.startedAt + d, endedAt: s.endedAt + d, hrLive: s.hrLive.map(p => [p[0] + d, p[1]]), features: s.features.map(f => ({ ...f, t: f.t + d })), events: s.events.map(e => ({ ...e, t: e.t + d })) }; };
 const ZONES = { lt1Hr: 140, lt1Speed: 8.4, lt2Hr: 157, lt2Speed: 10.5 };
 /** Mean heart rate of the seconds [a, b) — the truth a window should give. */
 const truthHr = (s, a, b) => mean(s.hrLive.filter(p => p[0] >= T0 + a * 1000 && p[0] < T0 + b * 1000).map(p => p[1]));
@@ -133,7 +135,7 @@ const truthHr = (s, a, b) => mean(s.hrLive.filter(p => p[0] >= T0 + a * 1000 && 
   // straight into a 6-min cool-down jog 18 bpm lower, then stood for the sample
   const jog = mk({ hr: simHr({ segs: [{ until: 1800, hr: run }, { until: 2160, hr: 144, tau: 45 }, { until: 2250, hr: 102, tau: 55 }], seed: 2 }), speed: 10.8, purpose: 'mlss', lactate: [[2230, 4.6]] }); const tj = runTimeline(jog);
   check('6-min jog 18 bpm lower, then the sample: two steps down — the first is shown as the end, nothing is concluded', tj.how === 'sample' && !tj.sure && tj.why === 'two-steps' && Math.abs(rel(jog, tj.end) - 1800) <= 35, `${mmss(rel(jog, tj.end))} ${tj.why}`);
-  check('  the value is still the end sample (typed after the stop), the proxy call is withheld, no zone moves', lactateChecks(jog).end === 4.6 && lactateVerdict(jog).unsure === true && verdictZoneChange(ZL, jog) === null && Number.isNaN(multiDayCurve([{ ...jog, id: 'j', startedAt: Date.now() - 1000 }]).points[0].hr));
+  check('  the value is still the end sample (typed after the stop), the proxy call is withheld, no zone moves', lactateChecks(jog).end === 4.6 && lactateVerdict(jog).unsure === true && verdictZoneChange(ZL, jog) === null && Number.isNaN(multiDayCurve([recent(jog)]).points[0].hr));
   check('  session numbers stay those of the whole recording', Math.abs(sessionMetrics(jog).meanHr - truthHr(jog, 0, 2251)) < 1e-9);
   // the same with the end confirmed in the card
   const jogOk = { ...jog, runEndSec: 1800 }; const tk = runTimeline(jogOk);
@@ -318,7 +320,7 @@ const truthHr = (s, a, b) => mean(s.hrLive.filter(p => p[0] >= T0 + a * 1000 && 
   const segs = [{ until: 600, hr: 125 }]; const ph = [[0, 'warmup']]; let t = 600; for (let i = 0; i < 4; i++) { ph.push([t, 'work']); segs.push({ until: t + 480, hr: 160 + i }); t += 480; if (i < 3) { ph.push([t, 'rest']); segs.push({ until: t + 180, hr: 125, tau: 45 }); t += 180; } } ph.push([t, 'cooldown']); segs.push({ until: t + 90, hr: 110, fast: 0.5 }, { until: t + 300, hr: 118 });
   for (const purpose of [undefined, 'lt1', 'mlss']) {
     const iv = mk({ hr: simHr({ segs, seed: 74 }), type: 'lt2', phases: ph, purpose, lactate: [[t + 60, 2.3]] }); const tv = runTimeline(iv); const vd = lactateVerdict(iv);
-    check(`4 × 8 min, purpose ${purpose ?? 'auto'}: interval verdict, no zone change, not a point of the curve`, tv.bouts === 4 && vd.intervals === true && vd.level === 'low' && verdictZoneChange({ lt1Hr: 100, lt1Speed: 5, lt2Hr: 100, lt2Speed: 5 }, iv) === null && multiDayCurve([{ ...iv, startedAt: Date.now() - 86400000 }]).points.length === 0 && !endOnlyProxy(iv).single && Number.isNaN(endOnlyProxy(iv).driftBpm), vd.en.slice(0, 60));
+    check(`4 × 8 min, purpose ${purpose ?? 'auto'}: interval verdict, no zone change, not a point of the curve`, tv.bouts === 4 && vd.intervals === true && vd.level === 'low' && verdictZoneChange({ lt1Hr: 100, lt1Speed: 5, lt2Hr: 100, lt2Speed: 5 }, iv) === null && multiDayCurve([recent(iv)]).points.length === 0 && !endOnlyProxy(iv).single && Number.isNaN(endOnlyProxy(iv).driftBpm), vd.en.slice(0, 60));
     if (purpose === undefined) check('  last-5-min figures are those of the last rep', tv.start === T0 + (t - 480) * 1000 && Math.abs(endWindowStats(iv).hr - truthHr(iv, t - 300, t)) < 1.2, endWindowStats(iv).hr.toFixed(1));
   }
   const up = mk({ hr: simHr({ segs, seed: 74 }), type: 'lt2', phases: ph, lactate: [[600 + 480 + 60, 3.0], [t + 60, 4.6]] }); check('  lactate climbing across the reps (3.0 → 4.6) is said so', lactateVerdict(up).level === 'high' && /rose \+1\.6/.test(lactateVerdict(up).en), lactateVerdict(up).en.slice(0, 70));

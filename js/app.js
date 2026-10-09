@@ -6,14 +6,14 @@ import { HeartRateSource } from './ble.js';
 import { ReplaySource, DemoSource, demoProfileForEngine } from './sources.js';
 import { SessionEngine, DEFAULT_PROTOCOL, DEFAULT_INTERVALS, buildStages, computeFeaturesOffline } from './session.js';
 import { analyzeSession, summarizeStages, smo2Steady, estimateOffsetMs, runTimeline, list } from './analysis.js';
-import { computeZones, sessionTargets, weeklyPlan, lt2Structure, sessionMetrics, assessRecent, sessionSummaryText, claudeSummary, lactateChecks, typedChecks, lactateVerdict, verdictZoneChange, multiDayCurve, endWindowStats } from './prescribe.js';
+import { computeZones, sessionTargets, weeklyPlan, lt2Structure, sessionMetrics, assessRecent, sessionSummaryText, claudeSummary, lactateChecks, typedChecks, setRestBaseline, lactateVerdict, verdictZoneChange, multiDayCurve, endWindowStats } from './prescribe.js';
 import { importFile } from './importers.js';
 import { liveChart, timelineChart, stepTestChart, trendChart } from './charts.js';
 
 // ---------- defaults ----------
-export const APP_VERSION = '1.1.12'; // keep in sync with sw.js VERSION
+export const APP_VERSION = '1.1.13'; // keep in sync with sw.js VERSION
 const DEFAULTS = {
-  profile: { birth: '1997-07-21', restHr: 52, maxHr: 188, maxHrMode: 'tanaka', lang: 'both', theme: 'system' },
+  profile: { birth: '1997-07-21', restHr: 52, restLactate: 0.8, maxHr: 188, maxHrMode: 'tanaka', lang: 'both', theme: 'system' },
   treadmill: { model: 'LTSXL', minSpeed: 0.8, maxSpeed: 18, speedStep: 0.1, maxIncline: 15, inclineStep: 0.5 },
   protocol: { ...DEFAULT_PROTOCOL },
   alpha1: { windowSec: 120, stepSec: 5, artifactMode: 'auto', lambda: 500, scales: 'fatmaxxer' },
@@ -73,7 +73,7 @@ function effectiveMaxHr() { const p = A.settings.profile; if (p.maxHrMode === 't
 function zonesObj() { const z = A.settings.zones; if (!Number.isFinite(z.lt1Hr) || !Number.isFinite(z.lt2Hr)) return null; return { ...computeZones({ ...z, maxHr: effectiveMaxHr() }), grade: z.grade, updatedAt: z.updatedAt, source: z.source }; }
 function planWeek() { const p = A.settings.plan; const start = p.startDate ? new Date(p.startDate).getTime() : (A.settings.zones.updatedAt || Date.now()); const w = Math.floor((Date.now() - start) / (7 * 86400000)) + 1 + (p.weekOffset || 0); return Math.max(1, w); }
 function applyTheme() { const th = A.settings.profile.theme; if (th === 'system') document.documentElement.removeAttribute('data-theme'); else document.documentElement.setAttribute('data-theme', th); }
-async function saveSettings() { await store.saveSettings(A.settings); setLang(A.settings.profile.lang); applyTheme(); }
+async function saveSettings() { await store.saveSettings(A.settings); setLang(A.settings.profile.lang); applyTheme(); setRestBaseline(A.settings.profile.restLactate); }
 function destroyCharts() { for (const c of A.charts) { try { c.destroy(); } catch (e) { /* ignore */ } } A.charts = []; }
 
 // ---------- router ----------
@@ -394,7 +394,7 @@ async function renderSessionDetail(id, current = () => true) {
     html += `<h2>젖산 검증 <span class="en">Lactate verification</span></h2><div class="card">
       <div class="grid2"><label class="field">러닝머신 km/h<input type="number" step="0.1" id="vc-speed" value="${s.speed ?? ''}"></label><label class="field">경사 %<input type="number" step="0.5" id="vc-incline" value="${s.incline ?? ''}"></label></div>
       <label class="field" style="margin-top:8px">목적 / purpose<select id="vc-purpose"><option value="" ${!s.purpose ? 'selected' : ''}>자동 (종료 ≥ 3 → MLSS 규칙) / auto</option><option value="lt1" ${s.purpose === 'lt1' ? 'selected' : ''}>LT1 검증 / LT1 check</option><option value="mlss" ${s.purpose === 'mlss' ? 'selected' : ''}>MLSS(LT2) 검증 / MLSS check</option></select></label>
-      <div class="grid3" style="margin-top:8px"><label class="field">안정 시 / rest<input type="text" inputmode="decimal" autocomplete="off" id="vc-rest" value="${c.rest ?? ''}"></label><label class="field">10분 / mid<input type="text" inputmode="decimal" autocomplete="off" id="vc-mid" value="${c.mid ?? ''}"></label><label class="field">종료 / end<input type="text" inputmode="decimal" autocomplete="off" id="vc-end" value="${c.end ?? ''}"></label></div>
+      <div class="grid3" style="margin-top:8px"><label class="field">안정 시 / rest<input type="text" inputmode="decimal" autocomplete="off" id="vc-rest" value="${c.rest ?? ''}" placeholder="${Number.isFinite(A.settings.profile.restLactate) ? '기준 ' + A.settings.profile.restLactate : ''}"></label><label class="field">10분 / mid<input type="text" inputmode="decimal" autocomplete="off" id="vc-mid" value="${c.mid ?? ''}"></label><label class="field">종료 / end<input type="text" inputmode="decimal" autocomplete="off" id="vc-end" value="${c.end ?? ''}"></label></div>
       <div class="row" style="margin-top:8px;align-items:flex-end"><label class="field grow">달리기 종료 (분:초 · 3505 = 35:05) / run ended at (min:s)<input type="text" id="vc-runend" inputmode="numeric" autocomplete="off" value="${fmtClock(endSec)}"></label>${ew.sure ? '' : '<button class="compact" id="vc-runend-ok">확정 <span class="en">confirm</span></button>'}</div>
       <p class="small muted" id="vc-runend-how" style="margin-top:4px">${how[0]}${tail[0]}${back[0]} <span class="en">${how[1]}${tail[1]}${back[1]}</span></p>
       ${unsure}
@@ -569,6 +569,7 @@ function renderSettings() {
   const chk = (path, label) => { const [g, k] = path.split('.'); return `<label class="check"><input type="checkbox" data-set="${path}" ${s[g][k] ? 'checked' : ''}>${label}</label>`; };
   return `<h2>${t('profile')}</h2><div class="card stack">
       <div class="grid2"><label class="field">${t('birth')}<input type="date" data-set="profile.birth" value="${esc(s.profile.birth)}"></label>${num('profile.restHr', t('rest_hr'), 'min="30" max="100"')}</div>
+      <div class="grid2">${num('profile.restLactate', '안정 시 젖산 mmol/L / Resting lactate', 'min="0.3" max="4" step="0.1"')}<p class="small muted" style="align-self:end;margin:0">아침 공복·채혈 규칙대로 잰 값. 세션에 안정 시 값이 없으면 LT1 판정(종료 ≤ 안정 시 + 1.0)에 씁니다.<span class="en">Measured fasted, by the sampling rules. Used for the LT1 rule (end ≤ rest + 1.0) when a session has no rest value.</span></p></div>
       <div class="grid2">${sel('profile.maxHrMode', t('max_hr'), [['tanaka', tx('max_hr_tanaka') + (age != null ? ` = ${Math.round(208 - 0.7 * age)}` : '')], ['manual', '직접 입력 / manual']])}${num('profile.maxHr', 'bpm (manual)', 'min="120" max="230"')}</div>
       <div class="grid2">${sel('profile.lang', t('lang'), [['both', '한국어 + English'], ['ko', '한국어'], ['en', 'English']])}${sel('profile.theme', '테마 / Theme', [['system', '시스템 / System'], ['dark', '다크 / Dark'], ['light', '라이트 / Light']])}</div></div>
     <h2>${t('treadmill')}</h2><div class="card stack"><label class="field">모델 / Model<input type="text" data-set="treadmill.model" value="${esc(s.treadmill.model)}"></label>
@@ -635,8 +636,8 @@ async function onViewClick(e) {
     case 'delete-import': e.stopPropagation(); confirmBox(t('delete') + '?', async () => { await store.deleteImport(b.dataset.id); await refreshLists(); render(); }); break;
     case 'import-detail': { const i = await store.getImport(b.dataset.id); modal(`<h3>${esc(i.filename)}</h3><dl class="kv"><dt>source</dt><dd>${esc(i.source)}</dd><dt>start</dt><dd>${fmtDate(i.startedAt)}</dd><dt>duration</dt><dd>${fmtClock(i.durationSec)}</dd>${i.meta?.position ? `<dt>position</dt><dd>${esc(i.meta.position)}</dd>` : ''}${i.smo2Series ? `<dt>SmO2 pts</dt><dd>${i.smo2Series.length}</dd>` : ''}${i.features ? `<dt>features</dt><dd>${i.features.length}</dd>` : ''}</dl><p class="small muted" style="margin-top:8px">세션 상세에서 「SmO2 파일 붙이기」로 연결하세요. / Attach from a session's detail view.</p>`); break; }
     case 'export-csv': if (A.detail) exportSessionCsv(A.detail); break;
-    case 'copy-summary': if (A.detail) { const s = A.detail; const r = analyzeSession(s); copyText(claudeSummary({ profile: { age: ageFrom(A.settings.profile.birth), restHr: A.settings.profile.restHr, maxHr: effectiveMaxHr(), appVersion: APP_VERSION }, zones: zonesObj(), session: s, metrics: sessionMetrics(s), analysis: r, plan: null })); } break;
-    case 'copy-plan': copyText(claudeSummary({ profile: { age: ageFrom(A.settings.profile.birth), restHr: A.settings.profile.restHr, maxHr: effectiveMaxHr(), appVersion: APP_VERSION }, zones: zonesObj(), plan: A.planCache })); break;
+    case 'copy-summary': if (A.detail) { const s = A.detail; const r = analyzeSession(s); copyText(claudeSummary({ profile: { age: ageFrom(A.settings.profile.birth), restHr: A.settings.profile.restHr, restLactate: A.settings.profile.restLactate, maxHr: effectiveMaxHr(), appVersion: APP_VERSION }, zones: zonesObj(), session: s, metrics: sessionMetrics(s), analysis: r, plan: null })); } break;
+    case 'copy-plan': copyText(claudeSummary({ profile: { age: ageFrom(A.settings.profile.birth), restHr: A.settings.profile.restHr, restLactate: A.settings.profile.restLactate, maxHr: effectiveMaxHr(), appVersion: APP_VERSION }, zones: zonesObj(), plan: A.planCache })); break;
     case 'attach-smo2': attachSmo2Modal(); break;
     case 'apply-zones': await applyZonesFromDetail(); break;
     case 'apply-verdict': { const ch = A.detail ? verdictZoneChange(A.settings.zones, A.detail) : null; if (!ch) break; A.settings.zones = { ...ch.zones, source: ((A.settings.zones?.source || 'manual') + ' +verify').slice(-60), updatedAt: Date.now() }; if (!A.settings.plan.startDate) A.settings.plan.startDate = new Date().toISOString().slice(0, 10); await saveSettings(); toast(`${tx('applied')} · ${ch.ko}`, 5000); await renderSessionDetail(A.detail.id); break; }
@@ -654,7 +655,7 @@ async function onViewClick(e) {
 
 // ---------- init ----------
 (async function init() {
-  const saved = await store.getSettings(); A.settings = coerceSettings(deepMerge(freshDefaults(), saved || {}));
+  const saved = await store.getSettings(); A.settings = coerceSettings(deepMerge(freshDefaults(), saved || {})); setRestBaseline(A.settings.profile.restLactate);
   setLang(A.settings.profile.lang); applyTheme();
   await refreshLists();
   let v = 'home'; try { v = localStorage.getItem('tl.view') || 'home'; } catch (e) { /* ignore */ }

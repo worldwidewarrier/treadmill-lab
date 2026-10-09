@@ -21,7 +21,7 @@ await page.click('[data-action=lactate]'); await page.waitForSelector('#lac-moda
 await page.click('[data-action=stop]'); await page.click('.modal [data-x=yes]'); await page.waitForSelector('#vc-end', { timeout: 10000 });
 const vc = await page.evaluate(() => ({ speed: TL.detail.speed, end: document.getElementById('vc-end').value, verdict: document.querySelector('.notice')?.textContent || '' }));
 check('verification card shows speed and end lactate from the live entry', vc.speed === 9.5 && vc.end === '1.9', JSON.stringify(vc));
-check('verdict = below LT1', /LT1 아래/.test(vc.verdict), vc.verdict.slice(0, 60));
+check('verdict judged against the resting baseline of Settings (0.8): end 1.9 = +1.1 → borderline, and it says so', /LT1 경계/.test(vc.verdict) && /기준 안정 시 0\.8 대비 \+1\.1/.test(vc.verdict), vc.verdict.slice(0, 60));
 await shot('30-verify-card');
 // edit end lactate to 3.0 → high verdict with apply button
 await page.fill('#vc-end', '3.0'); await page.$eval('#vc-end', el => el.dispatchEvent(new Event('change'))); await page.waitForSelector('[data-action=apply-verdict]', { timeout: 5000 });
