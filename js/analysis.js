@@ -563,6 +563,11 @@ export function agreement(hrA, hrB) {
  * Triangulate LT1/LT2 from lactate (anchor), HRVT and SmO2.
  * Returns consensus thresholds {lt1:{hr,speed,source}, lt2:{...}}, agreement table and grade A/B/C.
  */
+/** α1 guidance on/off (Settings → α1). Off: no HRVT in the analysis or the triangulation; α1 is still recorded. Default on (tests). */
+let ALPHA_ON = true;
+export function setAlphaUse(on) { ALPHA_ON = on !== false; }
+export const alphaOn = () => ALPHA_ON;
+
 export function triangulate({ lactate, hrv, smo2, stageCount = 0 }) {
   const pick = (lac, hrvt, bp) => {
     const cands = [];
@@ -598,7 +603,7 @@ export function analyzeSession(session) {
   const rows = summarizeStages(session);
   const lacStages = rows.filter(r => Number.isFinite(r.lactate)).map(r => ({ x: r.speed, la: r.lactate, hr: r.hr }));
   const lactate = lacStages.length >= 3 ? analyzeLactate(lacStages) : null;
-  const hrv = hrvThresholds(rows);
+  const hrv = ALPHA_ON ? hrvThresholds(rows) : null;
   const smo2 = smo2Breakpoints(rows);
   const tri = triangulate({ lactate, hrv, smo2, stageCount: rows.length });
   return { rows, lactate, hrv, smo2, tri };

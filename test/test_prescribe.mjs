@@ -1,3 +1,4 @@
+import { setAlphaUse } from '../js/analysis.js';
 import { computeZones, sessionTargets, weeklyPlan, lt2Structure, isRecoveryWeek, sessionMetrics, assessRecent, sessionSummaryText, claudeSummary } from '../js/prescribe.js';
 let failures = 0; const check = (n, c, d = '') => { console.log((c ? 'PASS ' : 'FAIL ') + n + (d ? '  ' + d : '')); if (!c) failures++; };
 const zones = computeZones({ lt1Hr: 146, lt2Hr: 167, lt1Speed: 9.9, lt2Speed: 12.0, maxHr: 188 });
@@ -24,4 +25,13 @@ check('practice sessions on the demo strap never adjust the real targets', insDe
 const txt = sessionSummaryText(fakeSession(0.65, 2, 1), m, zones); check('summary text bilingual', /LT1보다 높은/.test(txt.ko) && /Harder than LT1/.test(txt.en));
 const cs = claudeSummary({ profile: { age: 29, restHr: 52, maxHr: 188 }, zones: { ...zones, grade: 'B' }, session: fakeSession(0.8, 1, 0), metrics: m, plan: p1 });
 check('claude summary has sections', /Thresholds/.test(cs) && /Plan week 1/.test(cs));
+// α1 guidance switched off (Settings → α1, default since v1.1.14): no target change, no α1 verdict, the summary says to ignore α1
+setAlphaUse(false);
+const insOff = assessRecent([fakeSession(0.65, 2, 1), fakeSession(0.66, 1, 3)], zones, now - 70 * 86400000);
+check('α1 off: low α1 no longer lowers the LT1 target', insOff.lt1Adjust === 0 && !insOff.notes.some(n => /α1/.test(n.en)), JSON.stringify(insOff.notes.map(n => n.en)));
+const txtOff = sessionSummaryText(fakeSession(0.65, 2, 1), m, zones);
+check('α1 off: no α1 line or "harder than LT1" verdict in the session text', !/α1/.test(txtOff.ko + txtOff.en) && !/Harder than LT1/.test(txtOff.en), txtOff.en);
+const csOff = claudeSummary({ profile: { age: 29, restHr: 52, maxHr: 188 }, zones: { ...zones, grade: 'B' }, session: fakeSession(0.8, 1, 0), metrics: m, plan: p1 });
+check('α1 off: the copied summary keeps the α1 numbers but says not to use them', /mean α1/.test(csOff) && /switched OFF/.test(csOff));
+setAlphaUse(true);
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL PASS'); process.exit(failures ? 1 : 0);

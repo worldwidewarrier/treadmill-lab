@@ -106,7 +106,7 @@ check('CSV export says where the run ended and how that was found', !!m && Math.
 await change('#vc-runend', ''); await open('card-later'); await change('#vc-runend', '');
 await page.evaluate(() => TL.navigate('analysis')); await page.waitForSelector('#view h2'); await page.waitForTimeout(500);
 const md = await page.evaluate(() => ({ pts: TL.multiDay.points.map(p => [p.x, p.la, Number.isFinite(p.hr) ? Math.round(p.hr) : null, !!p.unsure]), cells: [...document.querySelectorAll('#view table tbody tr')].map(tr => [...tr.children].map(td => td.textContent).join('|')), note: /달리기 종료 시점이 불확실한 세션/.test(document.getElementById('view').textContent) }));
-check('multi-day table: the uncertain run shows "?" for its heart rate, the others their running heart rate; intervals are not a point', md.pts.length === 4 && md.pts.find(p => p[0] === 10.8)[3] === true && md.pts.find(p => p[0] === 10.8)[2] === null && md.cells.some(r => /^10\.8\|4\.2\|\?\|\?/.test(r)) && md.note && Math.abs(md.pts.find(p => p[0] === 8.6)[2] - 138) <= 1 && !md.pts.some(p => p[1] === 1.8), JSON.stringify(md.pts));
+check('multi-day table: the uncertain run shows "?" for its heart rate, the others their running heart rate; intervals are not a point', md.pts.length === 4 && md.pts.find(p => p[0] === 10.8)[3] === true && md.pts.find(p => p[0] === 10.8)[2] === null && md.cells.some(r => /^10\.8\|4\.2\|\?\|/.test(r)) && md.note && Math.abs(md.pts.find(p => p[0] === 8.6)[2] - 138) <= 1 && !md.pts.some(p => p[1] === 1.8), JSON.stringify(md.pts));
 await page.screenshot({ path: `${SHOTS}/42-multiday-uncertain.png`, fullPage: true });
 check('no page errors', errors.length === 0, errors.join(' | ').slice(0, 300));
 console.log('errors:', errors.length ? errors : 'none'); errors.length = 0;

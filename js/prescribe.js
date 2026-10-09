@@ -1,6 +1,6 @@
 // Zones, weekly plan, progression, auto-adjustments, lactate verification runs and rule-based summaries (KO/EN).
 import { analyzeLactate, interp } from './lactate.js';
-import { list, smo2Steady, runTimeline, inStop, alphaTainted, runWindowStart, runWindowEnd, stoppedMs } from './analysis.js';
+import { list, smo2Steady, runTimeline, inStop, alphaTainted, runWindowStart, runWindowEnd, stoppedMs, alphaOn } from './analysis.js';
 const r1 = v => Math.round(v * 10) / 10;
 const mean = a => a.length ? a.reduce((s, v) => s + v, 0) / a.length : NaN;
 /** Resting lactate measured on its own (Settings): used by the LT1 verdict when a session has no rest value of its own. */
@@ -108,7 +108,8 @@ export function assessRecent(sessions, zones, lastTestAt) {
   const m = recent.map(sessionMetrics).filter(x => Number.isFinite(x.meanAlpha1));
   if (m.length >= 2) {
     const ma = mean(m.map(x => x.meanAlpha1));
-    if (ma < 0.70) { lt1Adjust = -3; notes.push({ ko: `최근 LT1 세션 평균 α1 ${ma.toFixed(2)} < 0.70 → 목표 심박 −3 bpm`, en: `Recent LT1 sessions average α1 ${ma.toFixed(2)} < 0.70 → target HR −3 bpm`, kind: 'adjust' }); }
+    if (!alphaOn()) { /* α1 switched off: no target change from it */ }
+    else if (ma < 0.70) { lt1Adjust = -3; notes.push({ ko: `최근 LT1 세션 평균 α1 ${ma.toFixed(2)} < 0.70 → 목표 심박 −3 bpm`, en: `Recent LT1 sessions average α1 ${ma.toFixed(2)} < 0.70 → target HR −3 bpm`, kind: 'adjust' }); }
     else if (ma > 1.0 && mean(m.map(x => x.timeInZonePct).filter(isFinite)) > 80) { lt1Adjust = +2; notes.push({ ko: `α1 평균 ${ma.toFixed(2)}로 여유 있음 → 목표 심박 +2 bpm 허용`, en: `Comfortable α1 (${ma.toFixed(2)}) → allow target HR +2 bpm`, kind: 'adjust' }); }
     const drifts = m.map(x => x.driftPct).filter(isFinite);
     if (drifts.filter(d => d > 5).length >= 2) { holdDuration = true; notes.push({ ko: '심박 드리프트 >5%가 2회 이상 → 이번 주 지속시간 동결', en: 'HR drift >5% in ≥2 sessions → hold duration this week', kind: 'hold' }); }
@@ -136,13 +137,13 @@ export function sessionSummaryText(session, metrics, zones, analysis = null) {
   } else {
     const ty = String(session.type || '').toUpperCase(); ko.push(`${ty} 세션 ${d}분, 평균 심박 ${Math.round(metrics.meanHr)} bpm.`); en.push(`${ty} session ${d} min, mean HR ${Math.round(metrics.meanHr)} bpm.`);
     if (Number.isFinite(metrics.timeInZonePct)) { ko.push(`존 체류 ${Math.round(metrics.timeInZonePct)}%.`); en.push(`Time in zone ${Math.round(metrics.timeInZonePct)}%.`); }
-    if (Number.isFinite(metrics.meanAlpha1)) {
+    if (alphaOn() && Number.isFinite(metrics.meanAlpha1)) {
       ko.push(`평균 α1 ${metrics.meanAlpha1.toFixed(2)} (0.75 이상 ${Math.round(metrics.pctAlphaAbove75)}%).`); en.push(`Mean α1 ${metrics.meanAlpha1.toFixed(2)} (≥0.75 for ${Math.round(metrics.pctAlphaAbove75)}%).`);
       if (session.type === 'lt1') { if (metrics.meanAlpha1 < 0.70) { ko.push('→ LT1보다 높은 강도였습니다. 다음 세션은 3 bpm 낮추세요.'); en.push('→ Harder than LT1; go 3 bpm lower next time.'); } else if (metrics.meanAlpha1 >= 0.75) { ko.push('→ 유산소 역치 아래에서 잘 유지했습니다.'); en.push('→ Stayed below the aerobic threshold.'); } }
     }
     if (Number.isFinite(metrics.driftPct)) { ko.push(`심박 드리프트 ${metrics.driftPct >= 0 ? '+' : ''}${metrics.driftPct.toFixed(1)}%${metrics.driftPct > 5 ? ' (높음 — 수분·지속시간 점검)' : ''}.`); en.push(`HR drift ${metrics.driftPct >= 0 ? '+' : ''}${metrics.driftPct.toFixed(1)}%${metrics.driftPct > 5 ? ' (high — check hydration/duration)' : ''}.`); }
   }
-  if (Number.isFinite(metrics.artifactPct) && metrics.artifactPct > 5) { ko.push(`아티팩트 ${metrics.artifactPct.toFixed(1)}% — α1 해석에 주의.`); en.push(`Artifacts ${metrics.artifactPct.toFixed(1)}% — interpret α1 with care.`); }
+  if (Number.isFinite(metrics.artifactPct) && metrics.artifactPct > 5) { if (alphaOn()) { ko.push(`아티팩트 ${metrics.artifactPct.toFixed(1)}% — α1 해석에 주의.`); en.push(`Artifacts ${metrics.artifactPct.toFixed(1)}% — interpret α1 with care.`); } else { ko.push(`아티팩트 ${metrics.artifactPct.toFixed(1)}% — 스트랩 전극을 적시고 위치를 확인하세요.`); en.push(`Artifacts ${metrics.artifactPct.toFixed(1)}% — wet the electrodes and check the strap.`); } }
   return { ko: ko.join(' '), en: en.join(' ') };
 }
 
@@ -175,7 +176,8 @@ export function claudeSummary({ profile, zones, session, metrics, analysis, plan
     if (analysis?.tri) L.push(`Triangulation: LT1 ${analysis.tri.lt1 ? Math.round(analysis.tri.lt1.hr) + ' bpm (' + analysis.tri.lt1.source + ', grade ' + analysis.tri.grade1 + ')' : 'n/a'}; LT2 ${analysis.tri.lt2 ? Math.round(analysis.tri.lt2.hr) + ' bpm (' + analysis.tri.lt2.source + ', grade ' + analysis.tri.grade2 + ')' : 'n/a'}`);
   }
   if (plan) L.push(`Plan week ${plan.week}${plan.recovery ? ' (recovery)' : ''}: ` + plan.days.map(d => `${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.day]} ${d.en} ${d.minutes}min`).join('; '));
-  L.push('Question: please interpret this session and suggest adjustments. (DFA α1: 0.75 ≈ aerobic threshold, 0.5 ≈ anaerobic threshold; lactate is the anchor.)');
+  L.push(alphaOn() ? 'Question: please interpret this session and suggest adjustments. (DFA α1: 0.75 ≈ aerobic threshold, 0.5 ≈ anaerobic threshold; lactate is the anchor.)'
+    : 'Question: please interpret this session and suggest adjustments. (α1 guidance is switched OFF in the app for this athlete: α1 read 0.46 on a lactate-confirmed below-LT1 run, so α1 values above are recorded for comparison only — do not base intensity on them. Lactate is the anchor.)');
   return L.join('\n');
 }
 

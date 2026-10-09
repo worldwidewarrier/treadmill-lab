@@ -205,7 +205,7 @@ export class SessionEngine {
     const A = this.alerts, exitSec = this.settings.alerts?.zoneExitSec ?? 30;
     if (z === 'in') this.outsideSince = 0; else { if (!this.outsideSince) this.outsideSince = now; if ((now - this.outsideSince) / 1000 >= exitSec) { A?.cue(z === 'above' ? VOICE.zone_high() : VOICE.zone_low(), { beep: z === 'above' ? 'low' : 'high', vib: [150, 100, 150], key: 'zone', minGapSec: 60 }); } }
     this.zoneState = z;
-    if (this.mode === 'lt1' && Number.isFinite(rec.alpha1) && T.alphaMin) {
+    if (this.mode === 'lt1' && this.settings.alpha1?.guidance !== 'off' && Number.isFinite(rec.alpha1) && T.alphaMin) {
       if (rec.alpha1 < T.alphaMin) { if (!this.alphaLowSince) this.alphaLowSince = now; if ((now - this.alphaLowSince) / 1000 >= 60) A?.cue(VOICE.alpha_low(), { beep: 'low', key: 'alpha', minGapSec: 120 }); }
       else this.alphaLowSince = 0;
     }

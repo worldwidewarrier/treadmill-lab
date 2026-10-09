@@ -25,7 +25,7 @@ export const S = {
   // analysis
   sessions: { ko: '세션 기록', en: 'Sessions' }, tests: { ko: '테스트', en: 'Tests' }, imports: { ko: '가져온 파일', en: 'Imports' }, no_sessions: { ko: '저장된 세션이 없습니다.', en: 'No sessions saved yet.' },
   stage_table: { ko: '단계표', en: 'Stage table' }, thresholds: { ko: '역치 계산', en: 'Threshold methods' }, triangulation: { ko: '삼각측량', en: 'Triangulation' }, apply_zones: { ko: '이 역치를 존에 적용', en: 'Apply these thresholds' }, applied: { ko: '적용됨', en: 'Applied' },
-  attach_smo2: { ko: 'SmO2 파일 붙이기 (Train.Red CSV/FIT)', en: 'Attach SmO2 file (Train.Red CSV/FIT)' }, offset: { ko: '시간 보정', en: 'Time offset' }, delete: { ko: '삭제', en: 'Delete' }, export_csv: { ko: 'CSV 내보내기', en: 'Export CSV' }, copy_summary: { ko: 'Claude용 요약 복사', en: 'Copy summary for Claude' },
+  attach_smo2: { ko: 'SmO2 파일 붙이기 (Train.Red CSV/FIT)', en: 'Attach SmO2 file (Train.Red CSV/FIT)' }, smo2_pick_file: { ko: '📂 Train.Red 파일 선택', en: 'Choose Train.Red file' }, smo2_imported: { ko: '이미 가져온 파일', en: 'Already imported' }, offset: { ko: '시간 보정', en: 'Time offset' }, delete: { ko: '삭제', en: 'Delete' }, export_csv: { ko: 'CSV 내보내기', en: 'Export CSV' }, copy_summary: { ko: 'Claude용 요약 복사', en: 'Copy summary for Claude' },
   method: { ko: '방법', en: 'Method' }, lactate: { ko: '젖산', en: 'Lactate' }, smo2: { ko: 'SmO2', en: 'SmO2' }, agree: { ko: '일치', en: 'agree' }, caution: { ko: '주의', en: 'caution' }, disagree: { ko: '불일치', en: 'disagree' },
   time_in_zone: { ko: '존 체류', en: 'Time in zone' }, drift: { ko: '심박 드리프트', en: 'HR drift' }, mean_alpha: { ko: '평균 α1', en: 'Mean α1' }, duration: { ko: '시간', en: 'Duration' },
   // plan

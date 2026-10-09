@@ -59,12 +59,37 @@ await shot('50-replay-smo2');
 const [dl] = await Promise.all([page.waitForEvent('download'), page.click('[data-action=export-csv]')]); const csv = readFileSync(await dl.path(), 'utf8');
 check('session CSV: meta, lactate, SmO2 line, features and RR', /# type,free/.test(csv) && /# lactate_rest,,lactate_mid,,lactate_end,1.6,verdict,ok/.test(csv) && /# smo2_early_pct/.test(csv) && /t_iso,elapsed_s,hr_bpm,alpha1/.test(csv) && csv.split('\n').filter(l => /^\d{13},\d+,[01]$/.test(l)).length === picked.n, `${csv.length} chars`);
 
+// ---- SmO2 attached from the session's own screen: 「SmO2 파일 붙이기」 → 「Train.Red 파일 선택」 → file → this session (v1.1.14) ----
+await page.evaluate(async () => { const { store } = await import('./js/store.js'); delete TL.detail.smo2; await store.putSession(TL.detail); });
+await page.evaluate(id => TL.navigate('analysis', id), sid); await page.waitForSelector('#vc-end');
+check('session shown without SmO2 before the direct attach', await page.evaluate(() => !TL.detail.smo2));
+await page.click('[data-action=attach-smo2]'); await page.waitForSelector('#smo2-pick-file');
+check('attach dialog offers the file picker and the already-imported file', await page.evaluate(() => !!document.querySelector('#smo2-pick-file') && document.querySelectorAll('.modal [data-imp]').length === 1));
+// a cancelled picker must not hijack the next ordinary import
+{ const [fc] = await Promise.all([page.waitForEvent('filechooser'), page.click('#smo2-pick-file')]); void fc; }
+check('picker opened for this session', await page.evaluate(id => TL.pendingSmo2For === id, sid));
+await page.evaluate(() => TL.navigate('analysis')); await page.waitForSelector('[data-action=import]');
+{ const [fc] = await Promise.all([page.waitForEvent('filechooser'), page.click('[data-action=import]')]); void fc; }
+check('a later ordinary import clears the cancelled attach', await page.evaluate(() => !TL.pendingSmo2For));
+await page.evaluate(id => TL.navigate('analysis', id), sid); await page.waitForSelector('#vc-end');
+await page.click('[data-action=attach-smo2]'); await page.waitForSelector('#smo2-pick-file');
+{ const [fc] = await Promise.all([page.waitForEvent('filechooser'), page.click('#smo2-pick-file')]); await fc.setFiles(join(work, 'trainred_generated.csv')); }
+await page.waitForFunction(() => TL.detail && TL.detail.smo2 && TL.detail.smo2.series.length > 0, null, { timeout: 8000 });
+const da = await page.evaluate(async () => { const { store } = await import('./js/store.js'); const s = await store.getSession(TL.detail.id); return { n: s.smo2?.series.length, off: Math.round((s.smo2?.offsetMs || 0) / 1000), ok: s.smo2?.alignment?.ok, imports: (await store.listImports()).length, pending: TL.pendingSmo2For || null, toast: document.querySelector('#toast-root')?.textContent || '' }; });
+check('file picked on the session screen is attached to that session and aligned by heart rate', da.n === 12000 && da.ok === true && Math.abs(da.off - lag) <= 1 && /SmO2 첨부 ✓/.test(da.toast), JSON.stringify(da));
+check('the same file is not stored twice in the imports', da.imports === 1 && da.pending === null, `${da.imports} import(s)`);
+
 // ---- manual thresholds → Home and Plan ----
 await page.click('#nav button[data-view=settings]'); await page.waitForSelector('[data-set="zones.lt1Hr"]');
 for (const [k, v] of [['zones.lt1Hr', '140'], ['zones.lt1Speed', '8.4'], ['zones.lt2Hr', '157'], ['zones.lt2Speed', '10.5']]) { await page.fill(`[data-set="${k}"]`, v); await page.$eval(`[data-set="${k}"]`, el => el.dispatchEvent(new Event('change', { bubbles: true }))); await page.waitForTimeout(120); }
 await page.click('#nav button[data-view=home]'); await page.waitForSelector('.thr-card');
 const lastCard = (await page.textContent('[data-action=open-session]')).replace(/\s+/g, ' ');
-check('Home: the last-session card shows its heart rate and α1, not dashes', /HR 1[34]\d · α1 \d\.\d\d/.test(lastCard), lastCard.slice(0, 80));
+check('Home: the last-session card shows its heart rate, and no α1 while α1 guidance is off (default)', /HR 1[34]\d/.test(lastCard) && !/α1/.test(lastCard), lastCard.slice(0, 80));
+// α1 guidance back on (Settings → α1): the α1 figures return; then off again for the rest of the run
+await page.evaluate(async () => { TL.settings.alpha1.guidance = 'on'; await TL.saveSettings(); TL.navigate('home'); }); await page.waitForSelector('.thr-card');
+const lastOn = (await page.textContent('[data-action=open-session]')).replace(/\s+/g, ' ');
+check('…with α1 guidance on, the card shows α1 again', /HR 1[34]\d · α1 \d\.\d\d/.test(lastOn), lastOn.slice(0, 80));
+await page.evaluate(async () => { TL.settings.alpha1.guidance = 'off'; await TL.saveSettings(); });
 const home = await page.textContent('#view'); check('Home shows the manual thresholds and a session for today', /140\s*bpm/.test(home) && /157\s*bpm/.test(home) && /8\.4 km\/h/.test(home) && /manual/.test(home), home.replace(/\s+/g, ' ').slice(0, 110));
 await page.click('#nav button[data-view=plan]'); await page.waitForSelector('.plan-day');
 const plan = await page.evaluate(() => ({ days: document.querySelectorAll('.plan-day').length, zones: document.querySelectorAll('.zone-item').length, note: document.querySelector('#view .card p.small.muted')?.textContent.slice(0, 60), z2: [...document.querySelectorAll('.zone-item')][1]?.textContent.replace(/\s+/g, ' ') }));
@@ -109,7 +134,11 @@ const bk2 = join(work, 'backup_settings.json'); writeFileSync(bk2, JSON.stringif
 await page.click('#nav button[data-view=live]'); await page.waitForSelector('#mode-seg'); await page.click('#mode-seg button[data-mode=free]'); await page.click('#src-seg button[data-src=demo]'); await page.selectOption('#demo-speed', '10');
 await page.click('[data-action=connect]'); await page.waitForSelector('[data-action=start]:not([disabled])'); await page.click('[data-action=start]'); await page.waitForSelector('#lv-hr');
 const run1 = await page.evaluate(() => ({ step: TL.engine.stepSec, mode: TL.engine.filter.mode }));
-await page.click('#nav button[data-view=settings]'); await page.waitForSelector('[data-action=restore]'); await (await page.$('#file-input')).setInputFiles(bk2); await page.waitForTimeout(900);
+await page.waitForFunction(() => document.querySelector('#lv-art-s')?.textContent.includes('%'), null, { timeout: 15000 });
+const liveOff = await page.evaluate(() => ({ tile: !!document.querySelector('#lv-a1-box'), single: document.querySelector('.live-big').classList.contains('single'), art: document.querySelector('#lv-art-s')?.textContent, series: TL.live.chart.u.series.map(x => x.label).filter(Boolean) }));
+check('live screen with α1 off: no α1 tile, heart rate full width, artifacts still shown, chart without α1', !liveOff.tile && liveOff.single && /%/.test(liveOff.art) && !liveOff.series.includes('α1'), JSON.stringify(liveOff));
+await page.click('#nav button[data-view=settings]'); await page.waitForSelector('[data-action=restore]');
+check('Settings has the α1 switch, set to off', await page.$eval('[data-set="alpha1.guidance"]', el => el.value) === 'off'); await (await page.$('#file-input')).setInputFiles(bk2); await page.waitForTimeout(900);
 const mid = await page.evaluate(() => ({ step: TL.engine.stepSec, state: TL.engine.state, want: TL.settings.alpha1.stepSec }));
 check('restore during a running session: the session goes on with the settings it started with', mid.state === 'running' && mid.step === run1.step && mid.want === 10, JSON.stringify({ run1, mid }));
 await page.click('#nav button[data-view=live]'); await page.waitForSelector('[data-action=stop]'); await page.click('[data-action=stop]'); await page.click('.modal [data-x=yes]'); await page.waitForSelector('#vc-end', { timeout: 10000 });

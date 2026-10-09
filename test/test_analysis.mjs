@@ -1,5 +1,5 @@
 // node test/test_analysis.mjs — synthetic step test through summarizeStages → HRVT / SmO2 / triangulation
-import { analyzeSession, hrvThresholds, smo2Breakpoints, agreement, triangulate } from '../js/analysis.js';
+import { analyzeSession, hrvThresholds, smo2Breakpoints, agreement, triangulate, setAlphaUse } from '../js/analysis.js';
 let failures = 0;
 const check = (n, c, d = '') => { console.log((c ? 'PASS ' : 'FAIL ') + n + (d ? '  ' + d : '')); if (!c) failures++; };
 
@@ -52,5 +52,7 @@ check('a1 never crossing → hrvt1 null with note', r3.hrvt1 === null && /never/
   const noisy = [1.2, 1.25, 0.7, 1.1, 0.45, 1.0].map((a, i) => ({ idx: i + 1, speed: null, incline: 1, hr: 120 + 10 * i, alpha1: a, artifactPct: 1 }));
   const h2 = hrvThresholds(noisy); check('…also on the first-crossing path (weak fit)', h2.hrvt1 && h2.hrvt1.how === 'interp' && Number.isNaN(h2.hrvt1.speed), JSON.stringify(h2.hrvt1));
   const tri = triangulate({ lactate: null, hrv: h, smo2: null, stageCount: 6 }); check('…and the triangulated threshold carries no made-up speed', tri.lt1 && Number.isNaN(tri.lt1.speed), JSON.stringify(tri.lt1 && { hr: tri.lt1.hr, speed: tri.lt1.speed })); }
+// α1 guidance off: the analysis has no HRVT, so no threshold can come from α1 alone
+setAlphaUse(false); { const ro = analyzeSession(session); check('α1 off: no HRVT in the analysis and none in the triangulation', ro.hrv === null && ![ro.tri.lt1, ro.tri.lt2].some(t => t && (t.anchor.src === 'hrv' || t.others.some(o => o.src === 'hrv'))), JSON.stringify({ lt1: ro.tri.lt1?.source, lt2: ro.tri.lt2?.source })); } setAlphaUse(true);
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL PASS');
 process.exit(failures ? 1 : 0);

@@ -49,7 +49,7 @@ p { margin: 0 0 8px; } .muted { color: var(--muted); } .small { font-size: 0.82r
 .stack { display: grid; gap: 10px; }
 
 button, .btn { font: inherit; font-weight: 600; border-radius: 12px; border: 1px solid var(--line); background: var(--surface2); color: var(--fg); padding: 11px 14px; cursor: pointer; min-height: 44px; }
-button.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; } button.primary .en { color: inherit; opacity: 0.75; }
 button.danger { background: color-mix(in srgb, var(--bad) 18%, var(--surface2)); color: var(--bad); border-color: color-mix(in srgb, var(--bad) 40%, transparent); }
 button.ghost { background: transparent; } button.block { width: 100%; } button:disabled { opacity: 0.45; cursor: default; }
 button.big { min-height: 56px; font-size: 1.05rem; }
@@ -75,7 +75,7 @@ table.wrap-first th:first-child, table.wrap-first td:first-child { white-space: 
 .table-wrap { overflow-x: auto; margin: 0 -14px; padding: 0 14px; }
 
 /* live screen */
-.live-big { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.live-big { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; } .live-big.single { grid-template-columns: 1fr; }
 .metric { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; min-width: 0; }
 .metric .lbl { font-size: 0.72rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); display: flex; justify-content: space-between; }
 .metric .val { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 3.1rem; font-weight: 500; line-height: 1.05; margin-top: 2px; letter-spacing: -0.02em; }
@@ -116,4 +116,4 @@ table.wrap-first th:first-child, table.wrap-first td:first-child { white-space: 
 .agree { font-weight: 700; } .agree.agree-ok { color: var(--ok); } .agree.agree-caution { color: var(--warn); } .agree.agree-disagree { color: var(--bad); }
 .file-drop { border: 1px dashed var(--line); border-radius: var(--radius); padding: 14px; text-align: center; color: var(--muted); }
 details summary { cursor: pointer; color: var(--muted); font-size: 0.9rem; }
-@media (min-width: 560px) { .live-big { grid-template-columns: 1fr 1fr 1fr; } .metric .val { font-size: 3.6rem; } }
+@media (min-width: 560px) { .live-big { grid-template-columns: 1fr 1fr 1fr; } .live-big.single { grid-template-columns: 1fr; } .metric .val { font-size: 3.6rem; } }
