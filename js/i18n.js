@@ -9,7 +9,8 @@ export const S = {
   last_session: { ko: '최근 세션', en: 'Recent session' }, retest_due: { ko: '재검사 권장: 마지막 테스트 후 {weeks}주 경과', en: 'Retest recommended: {weeks} weeks since last test' },
   grade: { ko: '신뢰도', en: 'Confidence' }, source: { ko: '근거', en: 'Source' }, speed: { ko: '속도', en: 'Speed' }, hr: { ko: '심박', en: 'HR' }, incline: { ko: '경사', en: 'Incline' },
   // live
-  mode: { ko: '모드', en: 'Mode' }, mode_test: { ko: '단계 테스트', en: 'Step test' }, mode_lt1: { ko: 'LT1 세션', en: 'LT1 session' }, mode_lt2: { ko: 'LT2 세션', en: 'LT2 session' }, mode_free: { ko: '자유', en: 'Free' },
+  mode: { ko: '모드', en: 'Mode' }, mode_test: { ko: '단계 테스트', en: 'Step test' }, mode_lt1: { ko: 'LT1 세션', en: 'LT1 session' }, mode_lt2: { ko: 'LT2 세션', en: 'LT2 session' }, mode_free: { ko: '자유', en: 'Free' }, mode_verify: { ko: 'LT1 검증 (두 랩)', en: 'LT1 check (two laps)' },
+  lap1: { ko: '랩 1', en: 'Lap 1' }, lap2: { ko: '랩 2', en: 'Lap 2' }, gap: { ko: '간격', en: 'Gap' }, start_lap2: { ko: '2랩 시작', en: 'Start lap 2' }, end_lap: { ko: '랩 종료 (벨트 정지)', en: 'End lap (belt stopped)' }, start_lap1: { ko: '1랩 시작', en: 'Start lap 1' },
   source_ble: { ko: 'Polar H10 (블루투스)', en: 'Polar H10 (Bluetooth)' }, source_demo: { ko: '데모 (가상 스트랩)', en: 'Demo (virtual strap)' }, source_replay: { ko: '재생 (RR 파일)', en: 'Replay (RR file)' },
   connect: { ko: 'H10 연결', en: 'Connect H10' }, disconnect: { ko: '연결 해제', en: 'Disconnect' }, connected: { ko: '연결됨', en: 'Connected' }, connecting: { ko: '연결 중…', en: 'Connecting…' }, reconnecting: { ko: '재연결 중…', en: 'Reconnecting…' }, disconnected: { ko: '연결 안 됨', en: 'Not connected' },
   start: { ko: '시작', en: 'Start' }, stop: { ko: '종료', en: 'Finish' }, next_stage: { ko: '다음 단계', en: 'Next stage' }, lap: { ko: '랩', en: 'Lap' }, pause: { ko: '일시정지', en: 'Pause' }, resume: { ko: '재개', en: 'Resume' },
@@ -77,4 +78,14 @@ export const VOICE = {
   warmup_end: () => '워밍업 끝. 1단계 시작.',
   halfway: () => '절반 지났습니다.',
   minute_left: () => '1분 남았습니다.',
+  // two-lap LT1 verification run (v1.1.17)
+  lap_warn_start: (sec) => `${sec}초 후 1랩 시작. 검사 속도로 올리세요.`,
+  lap_start: (n, min) => `${n}랩 시작. ${min}분.`,
+  lap_warn: (sec) => `${sec}초 후 정지. 채혈 준비.`,
+  lap_stop: () => '정지. 벨트를 멈추고 서서 기다리세요. 30초 뒤 채혈.',
+  gap_sample: () => '채혈하세요.',
+  gap_restart: () => '간격 90초. 벨트를 다시 올리고 2랩 시작을 누르세요.',
+  gap_cap: () => '간격 3분 초과. 엄격 규칙이 적용됩니다.',
+  // LT1 session, late ceiling LT1 + 5 (v1.1.17)
+  ceiling: () => '후반 심박 천장 초과. 속도를 0.3 낮추세요.',
 };

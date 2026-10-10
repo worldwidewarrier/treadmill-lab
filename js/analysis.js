@@ -69,8 +69,10 @@ function crossingDescending(rows, key, level) {
 /**
  * HRV thresholds from stage rows (Rogers et al.: linear regression of a1 vs HR in the transition region).
  */
-export function hrvThresholds(rows, { artifactLimit = 5 } = {}) {
-  const valid = rows.filter(r => Number.isFinite(r.alpha1) && Number.isFinite(r.hr) && (!(r.artifactPct > artifactLimit)));
+/** α1 artifact gate (v1.1.17): a window with this share of artifacts or more says nothing about α1 (Rogers 2021 used 5 %; 3 % keeps the gate well inside what the H10 delivers on a good day). */
+export const ALPHA_ARTIFACT_MAX = 3;
+export function hrvThresholds(rows, { artifactLimit = ALPHA_ARTIFACT_MAX } = {}) {
+  const valid = rows.filter(r => Number.isFinite(r.alpha1) && Number.isFinite(r.hr) && (!(r.artifactPct >= artifactLimit)));
   const res = { hrvt1: null, hrvt2: null, fit: null, points: valid.length, note: '' };
   if (valid.length < 3) { res.note = 'need ≥3 valid stages'; return res; }
   const trans = valid.filter(r => r.alpha1 >= 0.4 && r.alpha1 <= 1.1);
@@ -347,16 +349,35 @@ export function runTimeline(session) {
   tlCache.set(session, entry); if (id != null) { tlById.delete(id); tlById.set(id, entry); if (tlById.size > 300) tlById.delete(tlById.keys().next().value); }
   return entry.tl;
 }
+/**
+ * The two laps of an LT1 verification run (type 'verify', v1.1.17) from the phase log: [{ start, end }, { start, end }] and the gap
+ * between them (lap-1 clock end → "Start lap 2"), or null when the record has no two laps (ended in the warm-up or in lap 1).
+ */
+export function lapsFromEvents(session) {
+  if (session.type !== 'verify') return null;
+  const ev = list(session.events); const tRec = session.endedAt || (() => { const hl = list(session.hrLive); return hl.length ? hl[hl.length - 1][0] : session.startedAt; })();
+  const ph = ev.filter(e => e.type === 'phase' && Number.isFinite(e.t)).sort((a, b) => a.t - b.t); const work = [];
+  for (let i = 0; i < ph.length; i++) if (ph[i].phase === 'work') work.push({ start: ph[i].t, end: ph[i + 1] ? ph[i + 1].t : tRec, open: !ph[i + 1] });
+  if (work.length < 2) return null;
+  const laps = work.slice(0, 2); const gapSec = Math.max(0, (laps[1].start - laps[0].end) / 1000);
+  return { laps, gapSec, lap1Sec: (laps[0].end - laps[0].start) / 1000, lap2Sec: (laps[1].end - laps[1].start) / 1000 };
+}
+/** Sample roles of a two-lap run: before lap 1 = rest; from the lap-1 stop to the lap-2 start = mid (the lap-1 value); after lap 2 = end. */
+function lapRole(lp, t) {
+  if (!lp) return null; const [L1, L2] = lp.laps;
+  if (t < L1.start) return 'rest'; if (t >= L1.end - 20000 && t < L2.start) return 'mid'; if (t >= L2.end - 20000) return 'end'; return null; // (20 s: a value typed as the clock ran out)
+}
 /** What is left when the timeline cannot be worked out: the recording as it is, with nothing concluded from it (why = 'error') — unless the end was typed by hand. */
 function plainTimeline(session) {
   const ev = Array.isArray(session.events) ? session.events : [], hl = Array.isArray(session.hrLive) ? session.hrLive : [];
   let first = null, last = null; for (const p of hl) if (p && Number.isFinite(p[0])) { if (first == null) first = p[0]; last = p[0]; }
   const t0 = Number.isFinite(session.startedAt) ? session.startedAt : (first ?? 0); const tRec = session.endedAt || (last ?? t0);
   const manual = Number.isFinite(session.runEndSec) ? t0 + session.runEndSec * 1000 : null; const byHand = manual != null && manual > t0 && manual <= tRec + 1000;
-  const end = byHand ? Math.min(manual, tRec) : tRec; const dur = (tRec - t0) / 1000; const samples = [];
-  for (const e of ev) { if (!e || e.type !== 'lactate' || !Number.isFinite(e.t) || !Number.isFinite(e.value)) continue; const rel = (e.t - t0) / 1000; samples.push({ t: e.t, value: e.value, role: rel <= 240 ? 'rest' : (rel >= dur - 300 || rel >= dur * 0.85) ? 'end' : 'mid' }); }
+  let lp = null; try { lp = lapsFromEvents(session); } catch (e) { lp = null; }
+  const end = byHand ? Math.min(manual, tRec) : (lp ? Math.min(lp.laps[1].end, tRec) : tRec); const dur = (tRec - t0) / 1000; const samples = [];
+  for (const e of ev) { if (!e || e.type !== 'lactate' || !Number.isFinite(e.t) || !Number.isFinite(e.value)) continue; const rel = (e.t - t0) / 1000; samples.push({ t: e.t, value: e.value, role: lapRole(lp, e.t) || (rel <= 240 ? 'rest' : (rel >= dur - 300 || rel >= dur * 0.85) ? 'end' : 'mid') }); }
   samples.sort((a, b) => a.t - b.t);
-  return { t0, tRec, start: t0, end, how: byHand ? 'manual' : 'finish', sure: byHand, why: byHand ? null : 'error', bouts: session.type === 'lt2' ? 2 : 1, stops: [], samples, lagMs: 0, tailSec: Math.max(0, (tRec - end) / 1000), entryT: null };
+  return { t0, tRec, start: lp ? lp.laps[0].start : t0, end, how: byHand ? 'manual' : lp ? 'phase' : 'finish', sure: byHand || !!lp, why: byHand || lp ? null : 'error', bouts: session.type === 'lt2' ? 2 : 1, stops: [], samples, lagMs: 0, tailSec: Math.max(0, (tRec - end) / 1000), entryT: null, twoLap: !!lp, laps: lp ? lp.laps : null, gapSec: lp ? lp.gapSec : null };
 }
 function buildTimeline(session) {
   const R = RUN_END; const H = hrSeries(session); const ev = list(session.events);
@@ -371,6 +392,12 @@ function buildTimeline(session) {
     else if (!work.length) bouts = 0;     // ended in the warm-up
     else { bouts = work.length; firstWork = work[0][0]; start = work[work.length - 1][0]; phaseEnd = work[work.length - 1][1]; }
   }
+  // A two-lap verification run (v1.1.17) is one run with a stop inside it (the gap): it begins with lap 1, the rep clock of lap 2 ends it,
+  // the gap sample is the mid (lap-1) value and the stop found in the gap is a stop like the one for a 10-min sample. A record that
+  // ended before lap 2 (warm-up or lap 1 only) is read like a plain run.
+  const lp = lapsFromEvents(session);
+  if (lp) { start = lp.laps[0].start; firstWork = start; phaseEnd = lp.laps[1].open ? null : lp.laps[1].end; }
+  else if (session.type === 'verify') { const ph = ev.filter(e => e.type === 'phase' && e.phase === 'work' && Number.isFinite(e.t)); if (ph.length) { start = ph[0].t; firstWork = start; } }
   const restLimit = Math.max(t0 + 240000, firstWork);
   const lac = ev.filter(e => e.type === 'lactate' && Number.isFinite(e.t)).sort((a, b) => a.t - b.t);
   // 1) the stops that something logged points to
@@ -446,8 +473,9 @@ function buildTimeline(session) {
   const endR = sure ? end : tRec; const dur = (endR - t0) / 1000; const tol = how === 'manual' ? 60000 : 0; const samples = [];
   for (const e of lac) {
     if (!Number.isFinite(e.value)) continue;
-    const own = eps.find(o => o.events.includes(e)); let role;
+    const own = eps.find(o => o.events.includes(e)); let role; const lr = lapRole(lp, e.t);
     if (e.t <= restLimit) role = 'rest';
+    else if (lr) role = lr;                                                           // a two-lap run: the laps say which value this is
     else if ((sure || final) && how !== 'finish' && e.t >= end - tol) role = 'end';  // taken after the running had stopped
     else if (how === 'manual' && own && own.stopT <= end + tol && own.stopT >= end - R.runOnMs) role = 'end'; // the end typed a little after the stop this value belongs to
     else if (own && own !== final) role = 'mid';                                     // its own stop was followed by more running
@@ -455,7 +483,9 @@ function buildTimeline(session) {
     samples.push({ t: e.t, value: e.value, role, stopT: own && Number.isFinite(own.stopT) ? own.stopT : null });
   }
   const lagMs = how === 'hr' || (final && !final.exact) ? R.lagMs : 0; // how late the end may be: nothing for a time that was pressed, typed or logged
-  return { t0, tRec, start, end, how, sure, why, bouts, stops, samples, lagMs, tailSec: Math.max(0, (tRec - end) / 1000), entryT: final && final.events.length ? final.events[0].t : null };
+  // a two-lap run: the gap is a stop of the run whether or not the heart rate showed it (the belt was stopped by the clock)
+  if (lp && !stops.some(s => s[0] <= lp.laps[1].start && s[1] >= lp.laps[0].end)) { const a = Math.max(start, lp.laps[0].end), b = Math.min(lp.laps[1].start + 30000, end); if (b > a) { stops.push([a, b, Math.min(lp.laps[1].start, b)]); stops.sort((x, y) => x[0] - y[0]); } }
+  return { t0, tRec, start, end, how, sure, why, bouts, stops, samples, lagMs, tailSec: Math.max(0, (tRec - end) / 1000), entryT: final && final.events.length ? final.events[0].t : null, twoLap: !!lp, laps: lp ? lp.laps : null, gapSec: lp ? lp.gapSec : null };
 }
 /** Does a heart-rate value at time t belong to a stop (standing, or still on the way back up to the level)? */
 export function inStop(tl, t) { for (const s of tl.stops) if (t > s[0] && t < s[1]) return true; return false; }

@@ -96,6 +96,7 @@ export function demoProfileForEngine(engine, { restHr = 92, hrPerKmh = 8.6, hrBa
     if (v.state !== 'running') speed = 0;
     else if (engine.mode === 'test') { if (v.phase === 'warmup') speed = engine.protocol.warmupSpeed; else if (v.phase === 'work' && v.stage) speed = v.stage.speed; else pausing = true; }
     else if (engine.mode === 'lt2') speed = v.phase === 'work' ? (engine.targets?.speedHi ?? 12) : v.phase === 'rest' ? 6 : v.phase === 'warmup' || v.phase === 'cooldown' ? 7 : 0;
+    else if (engine.mode === 'verify') { if (v.phase === 'work') speed = engine.meta?.speed ?? 8.7; else if (v.phase === 'warmup') speed = 6; else pausing = true; } // gap / done: standing on the belt edges
     else speed = engine.targets?.speedLo ? (engine.targets.speedLo + (engine.targets.speedHi ?? engine.targets.speedLo)) / 2 : 8;
     let hr, alpha;
     if (pausing) { hr = Math.max(95, lastWorkHr - 30); alpha = 1.0; }             // standing on the belt edges: partial recovery

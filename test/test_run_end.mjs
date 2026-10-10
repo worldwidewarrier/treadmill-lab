@@ -103,7 +103,7 @@ const truthHr = (s, a, b) => mean(s.hrLive.filter(p => p[0] >= T0 + a * 1000 && 
   check('mid value retyped in the card keeps the minute of the logged sample', cr.mid === 0.9 && cr.midMin === 30 && multiDayCurve([retyped]).points[0]?.la === 0.9, JSON.stringify(cr));
   const typedOnly = { ...mk({ hr, lactate: [[60, 0.6], [END + 60, 1.9]] }), speed: 7.8, lactateChecks: { mid: 0.8 }, lactateChecksV: 2 };
   const mdT = multiDayCurve([typedOnly]);
-  check('mid typed with no time: left out of the curve and listed as skipped', !mdT.points.length && mdT.skipped.length === 1 && mdT.skipped[0].x === 7.8 && mdT.skipped[0].why === 'long-no-mid', JSON.stringify(mdT.skipped));
+  check('mid typed with no time: left out of the curve and listed as skipped', !mdT.points.length && mdT.skipped.length === 1 && mdT.skipped[0].x === 7.8 && mdT.skipped[0].why === 'durability', JSON.stringify(mdT.skipped));
   { const un = multiDayCurve([{ ...s78, final: false }]), ns = multiDayCurve([{ ...s78, speed: null }]);
     check('every left-out run says why (unfinished, no speed)', un.skipped[0]?.why === 'unfinished' && ns.skipped[0]?.why === 'no-speed' && !un.points.length && !ns.points.length, JSON.stringify([un.skipped, ns.skipped])); }
   const typedMin = { ...typedOnly, midMinTyped: 30 }; const mdM = multiDayCurve([typedMin]);
@@ -164,7 +164,7 @@ const truthHr = (s, a, b) => mean(s.hrLive.filter(p => p[0] >= T0 + a * 1000 && 
   // straight into a 6-min cool-down jog 18 bpm lower, then stood for the sample
   const jog = mk({ hr: simHr({ segs: [{ until: 1800, hr: run }, { until: 2160, hr: 144, tau: 45 }, { until: 2250, hr: 102, tau: 55 }], seed: 2 }), speed: 10.8, purpose: 'mlss', lactate: [[2230, 4.6]] }); const tj = runTimeline(jog);
   check('6-min jog 18 bpm lower, then the sample: two steps down — the first is shown as the end, nothing is concluded', tj.how === 'sample' && !tj.sure && tj.why === 'two-steps' && Math.abs(rel(jog, tj.end) - 1800) <= 35, `${mmss(rel(jog, tj.end))} ${tj.why}`);
-  check('  the value is still the end sample (typed after the stop), the proxy call is withheld, no zone moves', lactateChecks(jog).end === 4.6 && lactateVerdict(jog).unsure === true && verdictZoneChange(ZL, jog) === null && Number.isNaN(multiDayCurve([recent(jog)]).points[0].hr));
+  check('  the value is still the end sample (typed after the stop), the proxy call is withheld, no zone moves; the curve takes its minutes-8–13 heart rate (v1.1.17), which does not hang on the end', lactateChecks(jog).end === 4.6 && lactateVerdict(jog).unsure === true && verdictZoneChange(ZL, jog) === null && (() => { const p = multiDayCurve([recent(jog)]).points[0]; return p.unsure === true && Math.abs(p.hr - truthHr(jog, 480, 780)) < 1.5; })());
   check('  session numbers stay those of the whole recording', Math.abs(sessionMetrics(jog).meanHr - truthHr(jog, 0, 2251)) < 1e-9);
   // the same with the end confirmed in the card
   const jogOk = { ...jog, runEndSec: 1800 }; const tk = runTimeline(jogOk);
@@ -318,14 +318,15 @@ const truthHr = (s, a, b) => mean(s.hrLive.filter(p => p[0] >= T0 + a * 1000 && 
 {
   const END = 1800; const hr = simHr({ segs: [{ until: 600, hr: 152 }, { until: 680, hr: 112, fast: 0.4 }, { until: END, hr: 156 }, { until: END + 100, hr: 104, fast: 0.5 }], seed: 61 });
   const s = mk({ hr, purpose: 'mlss', lactate: [[30, 1.0], [650, 3.4], [END + 60, 4.1]] });
-  check('as recorded', JSON.stringify(lactateChecks(s)) === '{"rest":1,"mid":3.4,"end":4.1,"midMin":10}');
-  s.lactateChecks = { end: 4.6 }; check('one field typed: only that one is fixed', JSON.stringify(lactateChecks(s)) === '{"rest":1,"mid":3.4,"end":4.6,"midMin":10}');
-  s.lactateChecks = { mid: null }; check('a field emptied stays empty (it used to refill from the recording)', JSON.stringify(lactateChecks(s)) === '{"rest":1,"mid":null,"end":4.1,"midMin":null}');
+  const cc = x => { const { rest, mid, end, midMin } = lactateChecks(x); return JSON.stringify({ rest, mid, end, midMin }); };
+  check('as recorded', cc(s) === '{"rest":1,"mid":3.4,"end":4.1,"midMin":10}');
+  s.lactateChecks = { end: 4.6 }; check('one field typed: only that one is fixed', cc(s) === '{"rest":1,"mid":3.4,"end":4.6,"midMin":10}');
+  s.lactateChecks = { mid: null }; check('a field emptied stays empty (it used to refill from the recording)', cc(s) === '{"rest":1,"mid":null,"end":4.1,"midMin":null}');
   s.lactateChecks = { rest: null, mid: null, end: null }; check('all three emptied: no verdict', lactateChecks(s).end === null && lactateVerdict(s) === null);
   s.lactateChecks = { end: 'abc' }; check('rubbish in a field counts as empty', lactateChecks(s).end === null);
   delete s.lactateChecks;
   const twoRest = mk({ hr, purpose: 'mlss', lactate: [[20, 1.0], [140, 1.2], [END + 60, 4.1]] });
-  check('a second baseline value (second finger before the run) is not the 10-min sample', JSON.stringify(lactateChecks(twoRest)) === '{"rest":1,"mid":null,"end":4.1,"midMin":null}');
+  check('a second baseline value (second finger before the run) is not the 10-min sample', cc(twoRest) === '{"rest":1,"mid":null,"end":4.1,"midMin":null}');
 }
 
 // ───────────── 10. LT2 mode: warm-up, rep(s), cool-down ─────────────
@@ -382,7 +383,7 @@ const truthHr = (s, a, b) => mean(s.hrLive.filter(p => p[0] >= T0 + a * 1000 && 
   const sess = (speed, la, level, daysAgo, typed) => { const hr = simHr({ segs: [{ until: 1800, hr: level }, { until: 1800 + 240, hr: level - 45, fast: 0.5 }], seed: speed * 10 }); const s = typed ? mk({ hr, speed, lactate: [[1860, la]] }) : mk({ hr, speed, extra: { lactateChecks: { end: la } } }); const shift = now - daysAgo * day - T0; s.startedAt += shift; s.endedAt += shift; s.hrLive = s.hrLive.map(p => [p[0] + shift, p[1]]); s.features = []; s.events = s.events.map(e => ({ ...e, t: e.t + shift })); return s; };
   const list = [sess(8, 1.1, 128, 9, true), sess(9, 1.4, 137, 7, true), sess(10, 1.9, 146, 5, false), sess(11, 2.9, 155, 3, true), sess(12, 4.4, 163, 1, true)];
   const md = multiDayCurve(list); const p10 = md.points.find(p => p.x === 10);
-  check('a run whose end is uncertain gives its lactate to the curve, not its heart rate', md.points.length === 5 && p10.unsure === true && Number.isNaN(p10.hr) && md.points.filter(p => !p.unsure).every(p => Number.isFinite(p.hr)), md.points.map(p => `${p.x}:${Number.isFinite(p.hr) ? Math.round(p.hr) : '–'}`).join(' '));
+  check('a run whose end is uncertain gives its lactate to the curve and (v1.1.17) its minutes-8–13 heart rate, which does not hang on the end', md.points.length === 5 && p10.unsure === true && Math.abs(p10.hr - 146) < 1.5 && md.points.every(p => Number.isFinite(p.hr)), md.points.map(p => `${p.x}:${Number.isFinite(p.hr) ? Math.round(p.hr) : '–'}`).join(' '));
   check('  the thresholds still get a heart rate (read off the other runs)', md.analysis && Number.isFinite(md.analysis.lt1Primary.hr) && Number.isFinite(md.analysis.lt2Primary.hr) && md.analysis.lt1Primary.hr > 128 && md.analysis.lt2Primary.hr < 164, `LT1 ${md.analysis.lt1Primary.hr.toFixed(0)} · LT2 ${md.analysis.lt2Primary.hr.toFixed(0)}`);
   check('  heart rates of the certain runs are those of the running (not of the 4-min tail)', md.points.filter(p => !p.unsure).every(p => Math.abs(p.hr - { 8: 128, 9: 137, 11: 155, 12: 163 }[p.x]) < 1.5));
 }
@@ -781,7 +782,7 @@ const truthHr = (s, a, b) => mean(s.hrLive.filter(p => p[0] >= T0 + a * 1000 && 
   { const day = 86400000; const now = Date.now();
     const sess = (speed, la, level, daysAgo, typed) => { const hr = simHr({ segs: [{ until: 1800, hr: level }, { until: 1800 + 240, hr: level - 45, fast: 0.5 }], seed: speed * 10 + 3 }); const s = typed ? mk({ hr, speed, lactate: [[1860, la]] }) : mk({ hr, speed, extra: { lactateChecks: { end: la } } }); const shift = now - daysAgo * day - T0; s.startedAt += shift; s.endedAt += shift; s.hrLive = s.hrLive.map(p => [p[0] + shift, p[1]]); s.features = []; s.events = s.events.map(e => ({ ...e, t: e.t + shift })); return s; };
     const md = multiDayCurve([sess(8, 1.1, 128, 9, true), sess(9, 1.4, 137, 7, true), sess(10, 1.9, 146, 5, true), sess(11, 2.9, 155, 3, false), sess(12, 4.4, 164, 1, false)]);
-    check('multi-day curve with the two fastest runs uncertain: their heart rate is not copied from the 10-km/h run, LT2 gets no heart rate', md.points.filter(p => p.unsure).length === 2 && md.analysis && !Number.isFinite(md.analysis.lt2Primary.hr), md.analysis ? `LT2 ${md.analysis.lt2Primary.x.toFixed(2)} km/h ${md.analysis.lt2Primary.hr}` : 'no analysis'); }
+    check('multi-day curve with the two fastest runs uncertain: their heart rate is their own (minutes 8–13), not a copy of the 10-km/h run, so LT2 gets a heart rate near 155–164', md.points.filter(p => p.unsure).length === 2 && md.analysis && md.analysis.lt2Primary.hr > 150 && md.analysis.lt2Primary.hr < 166, md.analysis ? `LT2 ${md.analysis.lt2Primary.x.toFixed(2)} km/h ${md.analysis.lt2Primary.hr}` : 'no analysis'); }
   // a record whose card fields were stored by v1.1.11 (all three at once): only the typed one is final
   { const hr = simHr({ segs: [{ until: 600, hr: 158 }, { until: 680, hr: 115, fast: 0.4 }, { until: 1830, hr: 160 }, { until: 2400, hr: 105, fast: 0.5 }], seed: 208 });
     const s = mk({ hr, purpose: 'mlss', lactate: [[640, 2.9], [1870, 3.4]] }); const fresh = lactateChecks(s);

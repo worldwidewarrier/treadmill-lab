@@ -1,13 +1,29 @@
 // Zones, weekly plan, progression, auto-adjustments, lactate verification runs and rule-based summaries (KO/EN).
 import { analyzeLactate, interp } from './lactate.js';
-import { list, smo2Steady, runTimeline, inStop, alphaTainted, runWindowStart, runWindowEnd, stoppedMs, alphaOn } from './analysis.js';
+import { list, smo2Steady, runTimeline, inStop, alphaTainted, runWindowStart, runWindowEnd, stoppedMs, alphaOn, ALPHA_ARTIFACT_MAX } from './analysis.js';
 const r1 = v => Math.round(v * 10) / 10;
 const mean = a => a.length ? a.reduce((s, v) => s + v, 0) / a.length : NaN;
 /** Resting lactate measured on its own (Settings): used by the LT1 verdict when a session has no rest value of its own. */
 let REST_BASELINE = null;
+/** Lowest lactate of the latest step test (the "lowest" of the two-lap rule: lap 1 must be ≤ lowest + 0.5); null = use the resting baseline. */
+let TEST_LOWEST = null;
 /** Running time (min) above which a constant run is a long run: judged for durability, not for LT1 (see verdictCore, multiDayCurve). */
 export const LONG_RUN_MIN = 45;
+/** Minutes at speed beyond which a lactate value is a durability reading, never a point of the multi-day curve (v1.1.17). */
+export const CURVE_MAX_MIN = 35;
+/** Minutes of running a single constant run needs to be a point of the curve (its heart rate is read in minutes 8–13). */
+export const CURVE_MIN_MIN = 15;
+/** The two-lap rule (v1.1.17): the gap between the laps beyond which only a rise ≤ STRICT_RISE passes (lactate clears while standing). */
+export const GAP_STRICT_SEC = 180, PASS_RISE = 0.5, STRICT_RISE = 0.3, FAIL_RISE = 1.0, END_MAX = 2.5, LINE_DELTA = 0.5, NEAR_LINE = 0.2;
 export function setRestBaseline(v) { REST_BASELINE = Number.isFinite(v) && v >= 0.3 && v <= 4 ? v : null; }
+export function setTestLowest(v) { TEST_LOWEST = Number.isFinite(v) && v >= 0.3 && v <= 4 ? v : null; }
+/** The line of the two-lap rule: lowest + 0.5, "lowest" = lowest in-test lactate of the latest step test, else the resting baseline. */
+export function lactateFloor() { return TEST_LOWEST != null ? { lowest: TEST_LOWEST, from: 'test' } : REST_BASELINE != null ? { lowest: REST_BASELINE, from: 'baseline' } : null; }
+/** Lowest lactate of the exercise stages of a step test (the warm-up and a value logged before stage 1 do not count). */
+export function testLowest(session) {
+  const v = list(session && session.stages).map(s => s && s.lactate).filter(x => Number.isFinite(x) && x >= 0.3);
+  return v.length >= 2 ? Math.min(...v) : null;
+}
 /** Do the samples [[t, …], …] span at least `ms`? */
 const covers = (pts, ms) => { let a = Infinity, b = -Infinity; for (const p of pts) { if (p[0] < a) a = p[0]; if (p[0] > b) b = p[0]; } return b - a >= ms; };
 /** Length of the α1 window the session was recorded with: an α1 value stamped t is made of the beats of [t − window, t]. */
@@ -40,7 +56,8 @@ export function computeZones(z) {
 export function sessionTargets(zones, type, opts = {}) {
   if (!zones) return null;
   const { lt1Hr, lt2Hr, lt1Speed, lt2Speed } = zones; const adj = opts.lt1Adjust || 0;
-  if (type === 'lt1') return { hrLo: Math.round(lt1Hr - 10 + adj), hrHi: Math.round(lt1Hr - 3 + adj), speedLo: Number.isFinite(lt1Speed) ? r1(lt1Speed - 1.0) : NaN, speedHi: Number.isFinite(lt1Speed) ? r1(lt1Speed - 0.3) : NaN, alphaMin: 0.75, durationSec: (opts.minutes || 50) * 60 };
+  // ceilHr / lateFromSec (v1.1.17): after 20 min of an LT1 session the ceiling is LT1 + 5 — the drift of a steady run is allowed; above it, "slow down 0.3"
+  if (type === 'lt1') return { hrLo: Math.round(lt1Hr - 10 + adj), hrHi: Math.round(lt1Hr - 3 + adj), ceilHr: Math.round(lt1Hr + 5), lateFromSec: 1200, speedLo: Number.isFinite(lt1Speed) ? r1(lt1Speed - 1.0) : NaN, speedHi: Number.isFinite(lt1Speed) ? r1(lt1Speed - 0.3) : NaN, alphaMin: 0.75, durationSec: (opts.minutes || 50) * 60 };
   if (type === 'lt2') return { hrLo: Math.round(lt2Hr - 3), hrHi: Math.round(lt2Hr + 3), speedLo: Number.isFinite(lt2Speed) ? r1(lt2Speed - 0.3) : NaN, speedHi: Number.isFinite(lt2Speed) ? r1(lt2Speed) : NaN, alphaMin: null };
   return null;
 }
@@ -55,40 +72,56 @@ export function lt2Structure(week) {
 }
 export const isRecoveryWeek = week => ((week - 1) % 8) + 1 === 4 || ((week - 1) % 8) + 1 === 8;
 
-/** Weekly plan for availability: weekdays (Mon–Fri) minutes, weekend minutes; goal 'base' | 'perf' | 'health'. */
-export function weeklyPlan({ zones, week = 1, weekdayMin = 60, weekendMin = 150, goal = 'base', lt1Adjust = 0 }) {
+/** Running minutes of the longest real session of the last `days` days (the long-run cap of v1.1.17: next long run ≤ 110 % of it). */
+export function longestRecentMin(sessions, { days = 30, now = Date.now() } = {}) {
+  let best = 0;
+  for (const s of sessions || []) {
+    if (!s || !s.final || s.sourceKind === 'demo' || !Number.isFinite(s.startedAt) || now - s.startedAt > days * 86400000) continue;
+    const m = s.metrics && Number.isFinite(s.metrics.durationSec) ? s.metrics.durationSec / 60 : (s.endedAt ? (s.endedAt - s.startedAt - (s.pauseMs || 0)) / 60000 : 0);
+    if (m > best) best = m;
+  }
+  return best > 0 ? Math.round(best) : null;
+}
+/**
+ * Weekly plan for availability: weekdays (Mon–Fri) minutes, weekend minutes; goal 'base' | 'perf' | 'health'.
+ * v1.1.17: Thursday is the LT1 verification run (two laps, 45 min; verifySpeed = the band finder's next test speed); the long run is
+ * capped at 110 % of the longest run of the last 30 days (longestMin) and takes a mid sample at 30 min plus the end sample.
+ */
+export function weeklyPlan({ zones, week = 1, weekdayMin = 60, weekendMin = 150, goal = 'base', lt1Adjust = 0, longestMin = null, verifySpeed = null }) {
   const rec = isRecoveryWeek(week); const k = rec ? 0.7 : 1;
   const T1 = sessionTargets(zones, 'lt1', { lt1Adjust }); const T2 = sessionTargets(zones, 'lt2');
   const easy = T1 ? { hrLo: T1.hrLo - 5, hrHi: T1.hrHi - 4 } : null; const steady = T1 ? { hrLo: T1.hrLo, hrHi: T1.hrHi } : null;
-  const longMin = Math.min(weekendMin, Math.round((90 + 10 * Math.min(week - 1, 12)) * k));
+  let longMin = Math.min(weekendMin, Math.round((90 + 10 * Math.min(week - 1, 12)) * k)); let longCap = null;
+  if (Number.isFinite(longestMin) && longestMin > 0) { const cap = Math.max(30, Math.round(1.1 * longestMin / 5) * 5); if (cap < longMin) { longMin = cap; longCap = { longestMin, cap }; } }
   const wd = Math.round(Math.min(weekdayMin, 60) * k) - 5; // leave 5 min for transitions
   const st = lt2Structure(week);
   const lt2Day = st && !rec ? { type: 'lt2', ko: `LT2 세션 ${st.label.split(' / ')[0]}`, en: `LT2 session ${st.label.split(' / ')[1]}`, minutes: Math.round((st.warmupSec + st.reps * st.workSec + (st.reps - 1) * st.restSec + st.cooldownSec) / 60), hr: T2, structure: st } : { type: 'lt1', ko: '회복 LT1 (쉬움)', en: 'Recovery LT1 (easy)', minutes: Math.round(45 * k), hr: easy };
+  const vs = Number.isFinite(verifySpeed) ? verifySpeed : (zones && Number.isFinite(zones.lt1Speed) ? zones.lt1Speed : null);
   const days = [
     { day: 1, type: 'lt1', ko: 'LT1 쉬움', en: 'LT1 easy', minutes: wd, hr: easy },
     { day: 2, type: 'lt1', ko: 'LT1 안정', en: 'LT1 steady', minutes: wd, hr: steady },
     { day: 3, ...lt2Day },
-    { day: 4, type: 'lt1', ko: '회복 LT1 (쉬움)', en: 'Recovery LT1 (easy)', minutes: Math.round(45 * k), hr: easy },
+    { day: 4, type: 'verify', ko: `LT1 검증 달리기 (두 랩${vs != null ? `, ${vs.toFixed(1)} km/h` : ''})`, en: `LT1 verification run (two laps${vs != null ? `, ${vs.toFixed(1)} km/h` : ''})`, minutes: 45, hr: steady, speed: vs, note: { ko: '공복 · 쉬운 5분 → 랩 1 10분 → 간격 60–90초(서서, 30–45초 뒤 채혈) → 랩 2 30분 → 종료 채혈', en: 'fasted · 5 min easy → lap 1 10 min → gap 60–90 s (stand still, sample 30–45 s after the stop) → lap 2 30 min → end sample' } },
     { day: 5, type: 'lt1', ko: 'LT1 안정', en: 'LT1 steady', minutes: wd, hr: steady },
-    { day: 6, type: 'long', ko: `긴 LT1 ${longMin}분`, en: `Long LT1 ${longMin} min`, minutes: longMin, hr: steady },
+    { day: 6, type: 'long', ko: `긴 LT1 ${longMin}분`, en: `Long LT1 ${longMin} min`, minutes: longMin, hr: steady, note: { ko: `30분에 중간 채혈 + 종료 채혈(두 손가락)${longCap ? ` · 상한 = 30일 최장 ${longCap.longestMin}분 × 1.1` : ''}`, en: `mid sample at 30 min + end sample (two fingers)${longCap ? ` · cap = 110 % of the 30-day longest (${longCap.longestMin} min)` : ''}` } },
     { day: 0, type: goal === 'perf' && !rec ? 'tempo' : 'lt1', ko: goal === 'perf' && !rec ? '템포 20분 (LT2−5)' : 'LT1 쉬움 또는 휴식', en: goal === 'perf' && !rec ? 'Tempo 20 min (LT2−5)' : 'LT1 easy or rest', minutes: Math.round(Math.min(90, weekendMin * 0.5) * k), hr: goal === 'perf' && !rec && T2 ? { hrLo: T2.hrLo - 7, hrHi: T2.hrLo - 1 } : easy },
   ];
   const total = days.reduce((s, d) => s + d.minutes, 0); const hard = days.filter(d => d.type === 'lt2' || d.type === 'tempo').reduce((s, d) => s + d.minutes * 0.55, 0);
-  return { week, recovery: rec, days, totalMin: total, hardPct: Math.round(100 * hard / total), speeds: T1 ? { lt1: [T1.speedLo, T1.speedHi], lt2: T2 ? [T2.speedLo, T2.speedHi] : null } : null };
+  return { week, recovery: rec, days, totalMin: total, hardPct: Math.round(100 * hard / total), longCap, speeds: T1 ? { lt1: [T1.speedLo, T1.speedHi], lt2: T2 ? [T2.speedLo, T2.speedHi] : null } : null };
 }
 
 /** Per-session metrics used by insights and summaries. */
 export function sessionMetrics(session) {
   // A Free / LT1 run in which something logged marks a stop (a lactate entry, Pause, the run end typed in the card) is measured up to
   // where the running ended and without the stops inside it. Every other session: the whole recording, as it always was.
-  const logged = (session.type === 'free' || session.type === 'lt1') && list(session.hrLive).length > 0 && (Number.isFinite(session.runEndSec) || list(session.events).some(e => e.type === 'lactate' || e.type === 'pause'));
+  const logged = (session.type === 'free' || session.type === 'lt1' || session.type === 'verify') && list(session.hrLive).length > 0 && (session.type === 'verify' || Number.isFinite(session.runEndSec) || list(session.events).some(e => e.type === 'lactate' || e.type === 'pause'));
   const tl = logged ? runTimeline(session) : null; // (sessions with nothing logged — nearly all of them — are not even looked at)
-  const cut = tl && tl.sure && (tl.how === 'sample' || tl.how === 'pause' || tl.how === 'manual' || tl.stops.length) ? tl : null;
+  const cut = tl && tl.sure && (tl.how === 'sample' || tl.how === 'pause' || tl.how === 'manual' || tl.how === 'phase' || tl.stops.length) ? tl : null;
   const settle = alphaWindowMs(session);
   const feats = list(session.features).filter(f => !f.paused);
   const work = (cut ? list(session.features).filter(f => !alphaTainted(cut, f.t, settle)) : feats).filter(f => f.phase === 'work' || session.type === 'free'); // with a timeline its stops say what was running, not the Pause flag
-  const a1 = work.map(f => f.alpha1).filter(v => Number.isFinite(v));
-  const allHr = list(session.hrLive).filter(p => p[1] > 0); const hrs = cut ? allHr.filter(p => p[0] <= cut.end && !inStop(cut, p[0])) : allHr;
+  const a1 = work.filter(f => !(f.artifactPct >= ALPHA_ARTIFACT_MAX)).map(f => f.alpha1).filter(v => Number.isFinite(v)); // (α1 gate: a window with 3 % artifacts or more is left out)
+  const allHr = list(session.hrLive).filter(p => p[1] > 0); const hrs = cut ? allHr.filter(p => p[0] <= cut.end && (!cut.twoLap || p[0] >= cut.start) && !inStop(cut, p[0])) : allHr; // (a two-lap run: the laps, not the warm-up)
   const n = hrs.length; const third = Math.floor(n / 3);
   // Cardiac drift: last third vs first third, excluding the first 5 min (ramp-up) when the session is long enough (≥ 15 min).
   const tStart = session.startedAt ?? (hrs.length ? hrs[0][0] : 0); const tLast = hrs.length ? hrs[hrs.length - 1][0] : 0;
@@ -103,10 +136,15 @@ export function sessionMetrics(session) {
   return { durationSec: dur, meanHr: n ? mean(hrs.map(p => p[1])) : NaN, maxHr: n ? maxHr : NaN, meanAlpha1: mean(a1), pctAlphaAbove75: a1.length ? 100 * a1.filter(v => v >= 0.75).length / a1.length : NaN, minAlpha1: a1.length ? Math.min(...a1) : NaN, driftPct: Number.isFinite(hr1) && hr1 ? 100 * (hr3 / hr1 - 1) : NaN, artifactPct: art, timeInZonePct: tiz, rrCount: (session.rr || []).length };
 }
 
-/** Auto-adjustment rules from recent LT1 sessions (last 14 days) and test age. */
-export function assessRecent(sessions, zones, lastTestAt) {
+/**
+ * Auto-adjustment rules from recent LT1 sessions (last 14 days) and test age. opts.restLactateAt (ms or ISO date): when the resting
+ * baseline was measured — a monthly reminder to measure it again under the same conditions (v1.1.17).
+ */
+export function assessRecent(sessions, zones, lastTestAt, opts = {}) {
   const now = Date.now(); const recent = sessions.filter(s => s.type === 'lt1' && s.final && s.sourceKind !== 'demo' && now - s.startedAt < 14 * 86400000); // practice runs on the virtual strap never adjust real targets
   const notes = []; let lt1Adjust = 0; let holdDuration = false;
+  const restAt = opts.restLactateAt != null ? new Date(opts.restLactateAt).getTime() : NaN; const restDays = Number.isFinite(restAt) ? Math.floor((now - restAt) / 86400000) : null;
+  if (REST_BASELINE != null && (restDays == null || restDays >= 30)) notes.push({ kind: 'rest', ko: restDays == null ? `안정 시 젖산 기준값 ${REST_BASELINE}의 측정일이 없습니다 — 설정 → 프로필에 적어 두고, 매달 같은 조건(아침 공복, 채혈 규칙)으로 다시 재세요.` : `안정 시 젖산 기준값 ${REST_BASELINE} 측정 후 ${restDays}일 → 같은 조건(아침 공복, 채혈 규칙)으로 다시 재고 설정에 적으세요. 검증 달리기 날에는 안정 시 채혈이 필요 없습니다.`, en: restDays == null ? `No date for the resting-lactate baseline ${REST_BASELINE} — enter it in Settings → Profile and re-measure monthly under the same conditions (fasted, by the sampling rules).` : `${restDays} days since the resting-lactate baseline ${REST_BASELINE} was measured → re-measure it under the same conditions (fasted, by the sampling rules) and enter it in Settings. A check day needs no resting sample.` });
   const m = recent.map(sessionMetrics).filter(x => Number.isFinite(x.meanAlpha1));
   if (m.length >= 2) {
     const ma = mean(m.map(x => x.meanAlpha1));
@@ -137,7 +175,8 @@ export function sessionSummaryText(session, metrics, zones, analysis = null) {
     if (lac && !Number.isFinite(lac.lt2Primary.x)) { ko.push('젖산 곡선이 LT2를 지나기 전에 끝났습니다 — 다음엔 한두 단계 더 진행하세요.'); en.push('The lactate curve ended before LT2 — go one or two stages further next time.'); }
     if (analysis?.hrv && !analysis.hrv.hrvt1) { ko.push('α1이 0.75 아래로 내려오지 않았습니다 (아티팩트 또는 강도 부족).'); en.push('α1 never dropped below 0.75 (artifacts or insufficient intensity).'); }
   } else {
-    const ty = String(session.type || '').toUpperCase(); ko.push(`${ty} 세션 ${d}분, 평균 심박 ${Math.round(metrics.meanHr)} bpm.`); en.push(`${ty} session ${d} min, mean HR ${Math.round(metrics.meanHr)} bpm.`);
+    const ty = String(session.type || '').toUpperCase(); const tyKo = session.type === 'verify' ? 'LT1 검증(두 랩)' : ty, tyEn = session.type === 'verify' ? 'LT1 check (two laps)' : ty;
+    ko.push(`${tyKo} 세션 ${d}분, 평균 심박 ${Math.round(metrics.meanHr)} bpm.`); en.push(`${tyEn} session ${d} min, mean HR ${Math.round(metrics.meanHr)} bpm.`);
     if (Number.isFinite(metrics.timeInZonePct)) { ko.push(`존 체류 ${Math.round(metrics.timeInZonePct)}%.`); en.push(`Time in zone ${Math.round(metrics.timeInZonePct)}%.`); }
     if (alphaOn() && Number.isFinite(metrics.meanAlpha1)) {
       ko.push(`평균 α1 ${metrics.meanAlpha1.toFixed(2)} (0.75 이상 ${Math.round(metrics.pctAlphaAbove75)}%).`); en.push(`Mean α1 ${metrics.meanAlpha1.toFixed(2)} (≥0.75 for ${Math.round(metrics.pctAlphaAbove75)}%).`);
@@ -167,6 +206,8 @@ export function claudeSummary({ profile, zones, session, metrics, analysis, plan
       const endTxt = `run ended at ${mmss((ew.endT - session.startedAt) / 1000)} (found by: ${RUN_END_HOW[ew.how] || ew.how}${ew.tailSec >= 20 ? `; the recording went on for ${mmss(ew.tailSec)}` : ''})${ew.sure ? '' : ' — UNCERTAIN: the last-5-min figures are estimates'}`;
       const durTxt = ew.bouts === 1 ? `running time ${px.durMin.toFixed(1)} min` : ew.bouts === 0 ? 'ended in the warm-up' : `interval session — last rep ${px.durMin.toFixed(1)} min`;
       L.push(`Constant load (${session.purpose || 'auto'}): speed ${session.speed ?? '?'} km/h, incline ${session.incline ?? '?'} %; ${durTxt}; ${endTxt}; HR drift min 8-13 → last 5 ${Number.isFinite(px.driftBpm) ? (px.driftBpm >= 0 ? '+' : '') + px.driftBpm.toFixed(1) + ' bpm' : 'n/a'}; RPE end ${px.rpeEnd ?? 'n/a'}; last-5-min HR ${Number.isFinite(ew.hr) ? Math.round(ew.hr) : 'n/a'}, α1 ${Number.isFinite(ew.alpha1) ? ew.alpha1.toFixed(2) : 'n/a'}; lactate rest ${c.rest ?? 'n/a'}, ${midLabel(c).en} ${c.mid ?? 'n/a'}, end ${c.end ?? 'n/a'}${v ? `; verdict: ${v.en}` : ''}`);
+      const ls = lapStats(session); const fl = lactateFloor();
+      if (ls) L.push(`Two-lap LT1 check: lap 1 ${ls.lap1Min.toFixed(1)} min (HR min 5-10 ${Number.isFinite(ls.lap1Hr) ? Math.round(ls.lap1Hr) : 'n/a'} bpm) → gap ${Number.isFinite(ls.gapSec) ? Math.round(ls.gapSec) + ' s' : 'n/a'}${Number.isFinite(ls.gapSec) && ls.gapSec > GAP_STRICT_SEC ? ' (STRICT rule: > 3 min)' : ''} → lap 2 ${ls.lap2Min.toFixed(1)} min (HR min 1-6 ${Number.isFinite(ls.lap2Early) ? Math.round(ls.lap2Early) : 'n/a'} → last 5 ${Number.isFinite(ls.lap2Late) ? Math.round(ls.lap2Late) : 'n/a'}, drift ${Number.isFinite(ls.lap2Drift) ? (ls.lap2Drift >= 0 ? '+' : '') + ls.lap2Drift.toFixed(1) + ' bpm' : 'n/a'}); line = ${fl ? `${fl.lowest} (${fl.from}) + 0.5 = ${r1(fl.lowest + LINE_DELTA)}` : 'n/a'}; samples: ${list(session.events).filter(e => e.type === 'lactate' && Number.isFinite(e.value)).map(e => `${e.value} (lap ${e.lap ?? '?'}, ${e.runSec != null ? Math.round(e.runSec / 60) + ' min at speed' : '?'}${e.sinceStopSec != null ? `, ${e.sinceStopSec} s after the stop` : ''})`).join('; ') || 'none logged'}`);
       const ss = smo2Steady(session);
       if (ss) L.push(`SmO2 (constant load): 5-10 min ${Number.isFinite(ss.earlyMean) ? ss.earlyMean.toFixed(1) : 'n/a'} %, last 5 min ${Number.isFinite(ss.endMean) ? ss.endMean.toFixed(1) : 'n/a'} % (drift ${Number.isFinite(ss.drift) ? (ss.drift > 0 ? '+' : '') + ss.drift.toFixed(1) : 'n/a'})${ew.sure ? '' : ' [end of the run UNCERTAIN: window estimated]'}, min ${Number.isFinite(ss.min) ? ss.min.toFixed(1) : 'n/a'} %, end slope ${Number.isFinite(ss.slopeEnd) ? ss.slopeEnd.toFixed(2) : 'n/a'} %/min → ${ss.steady == null ? 'n/a' : ss.steady ? 'steady' : 'NOT steady'}; THb mean ${Number.isFinite(ss.thbMean) ? ss.thbMean.toFixed(1) : 'n/a'} (contact ${ss.contact ?? 'n/a'}); coverage ${Math.round(ss.coverageSec / 60)} min; offset ${Math.round((session.smo2.offsetMs || 0) / 1000)} s${session.smo2.alignment ? ` (${session.smo2.alignment.method === 'manual' ? 'manual' : session.smo2.alignment.ok ? `HR-verified, ${session.smo2.alignment.mad.toFixed(2)} bpm` : `UNVERIFIED, HR mismatch ${session.smo2.alignment.mad.toFixed(1)} bpm`})` : ' (clock only)'}`);
     }
@@ -204,12 +245,15 @@ export function lactateChecks(session) {
   // when the mid sample was taken, in whole minutes of the recording: the card and texts say "mid (30 min)", not a fixed "10 min".
   // A value retyped in the card keeps the time of the sample it corrects; a minute typed in the card (midMinTyped) wins; an emptied field has none.
   let midMin = midT == null ? null : Math.round((midT - session.startedAt) / 60000);
+  // a two-lap run: the mid value is the lap-1 value, its "minute" the running time of lap 1
+  const tl = session.type === 'verify' ? runTimeline(session) : null; const twoLap = !!(tl && tl.twoLap);
+  if (twoLap) midMin = Math.round((tl.laps[0].end - tl.laps[0].start) / 60000);
   if (Number.isFinite(session.midMinTyped)) midMin = session.midMinTyped;
   if (('mid' in typed && typed.mid == null) || (typed.mid == null && out.mid == null)) midMin = null;
-  return { ...out, ...typed, midMin };
+  return { ...out, ...typed, midMin, twoLap, gapSec: twoLap ? tl.gapSec : null };
 }
-/** Label of the mid sample: "중간 (30분)" / "mid (30 min)", or plain "중간" / "mid" when its time is not known. */
-export function midLabel(c) { const m = c && Number.isFinite(c.midMin) ? c.midMin : null; return m == null ? { ko: '중간', en: 'mid' } : { ko: `중간(${m}분)`, en: `mid (${m} min)` }; }
+/** Label of the mid sample: "중간 (30분)" / "mid (30 min)", "랩 1 (10분)" / "lap 1 (10 min)" of a two-lap run, or plain "중간" / "mid" when its time is not known. */
+export function midLabel(c) { const m = c && Number.isFinite(c.midMin) ? c.midMin : null; if (c && c.twoLap) return { ko: `랩 1${m != null ? `(${m}분)` : ''}`, en: `lap 1${m != null ? ` (${m} min)` : ''}` }; return m == null ? { ko: '중간', en: 'mid' } : { ko: `중간(${m}분)`, en: `mid (${m} min)` }; }
 /**
  * The card fields that were typed by hand ({ rest?, mid?, end? }, null = emptied). Up to v1.1.11 an edit in the card stored all three
  * fields, the two untouched ones as the clock had filed them; in such a record (no lactateChecksV) a field that equals that filing was
@@ -242,9 +286,34 @@ export function endWindowStats(session, sec = 300) {
   const pts = list(session.hrLive).filter(p => p[0] >= from && p[0] <= t1 && p[1] > 0 && !inStop(tl, p[0]));
   // (a mean needs something to stand on: a few seconds of heart rate left in the window — the strap taken off minutes before Finish — are not "the last 5 min")
   const hr = covers(pts, 60000) ? pts.map(p => p[1]) : [];
-  // α1: the stops decide what was running, not the app's Pause flag (see runTimeline)
-  const a1 = list(session.features).filter(f => f.t >= from && Number.isFinite(f.alpha1) && !alphaTainted(tl, f.t, settle)).map(f => f.alpha1);
-  return { hr: mean(hr), alpha1: mean(a1), endT: t1, fromT: from, how: tl.how, sure: tl.sure, why: tl.why, tailSec: tl.tailSec, bouts: tl.bouts, entryT: tl.entryT };
+  // α1: the stops decide what was running, not the app's Pause flag (see runTimeline); windows with ≥ 3 % artifacts are left out
+  const a1 = list(session.features).filter(f => f.t >= from && Number.isFinite(f.alpha1) && !(f.artifactPct >= ALPHA_ARTIFACT_MAX) && !alphaTainted(tl, f.t, settle)).map(f => f.alpha1);
+  return { hr: mean(hr), alpha1: mean(a1), endT: t1, fromT: from, how: tl.how, sure: tl.sure, why: tl.why, tailSec: tl.tailSec, bouts: tl.bouts, entryT: tl.entryT, twoLap: !!tl.twoLap, gapSec: tl.gapSec ?? null };
+}
+/** Mean heart rate of [a, b) when at least a minute of it is there (stops of the run skipped), else NaN. */
+function hrWindow(session, tl, a, b) { const pts = list(session.hrLive).filter(p => p[1] > 0 && p[0] >= a && p[0] < b && !inStop(tl, p[0])); return covers(pts, 60000) ? mean(pts.map(p => p[1])) : NaN; }
+/**
+ * The two laps of a verification run (v1.1.17): lap1Hr = minutes 5–10 of lap 1 (the heart rate the multi-day curve and the band take);
+ * lap2Drift = last 5 min of lap 2 − minutes 1–6 after the restart (the first minute is the re-rise); lap1Min / lap2Min = running time
+ * of each lap; gapSec = lap-1 clock end → "Start lap 2". null for any other session.
+ */
+export function lapStats(session, tl = runTimeline(session)) {
+  if (!tl || !tl.twoLap) return null; const [L1, L2] = tl.laps; const end2 = Math.min(L2.end, tl.end);
+  const lap1Min = (L1.end - L1.start) / 60000, lap2Min = Math.max(0, (end2 - L2.start - stoppedMs(tl, L2.start, end2)) / 60000);
+  const lap1Hr = lap1Min >= 6 ? hrWindow(session, tl, L1.start + 300000, L1.end) : NaN;
+  const early = lap2Min >= 12 ? hrWindow(session, tl, L2.start + 60000, L2.start + 360000) : NaN, late = lap2Min >= 12 ? hrWindow(session, tl, Math.max(L2.start, end2 - 300000), end2) : NaN;
+  return { lap1Hr, lap1Min, lap2Min, lap2Early: early, lap2Late: late, lap2Drift: Number.isFinite(early) && Number.isFinite(late) ? late - early : NaN, gapSec: tl.gapSec, sure: tl.sure };
+}
+/** Minutes 8–13 of a single constant run (the curve's heart rate for such runs, v1.1.17: before the drift, after the rise) — NaN when the run is shorter. */
+export function earlyWindowHr(session, tl = runTimeline(session)) {
+  const to = runWindowEnd(tl, tl.start + 480000, 300); if (to > tl.end + 1000) return NaN;
+  return hrWindow(session, tl, tl.start + 480000, to);
+}
+/** Seconds the belt stood still for the mid (10-min) sample of a constant run: from the stop the sample belongs to until the running resumed. null when not known. */
+function midStopSec(session, tl) {
+  if (!tl) return null; if (tl.twoLap) return tl.gapSec;
+  const smp = tl.samples.find(x => x.role === 'mid' && Number.isFinite(x.stopT)); if (!smp) return null;
+  const st = tl.stops.find(s => Math.abs(s[0] - smp.stopT) <= 30000); return st ? Math.max(0, (st[2] - st[0]) / 1000) : null;
 }
 /**
  * Proxies for an end-only MLSS call on ONE continuous run: running time, HR drift (minutes 8–13 → last 5 min of running), SmO2
@@ -275,6 +344,71 @@ export function lactateVerdict(session) {
   const vd = verdictCore(session, c, isMlss); return vd ? { kind: isMlss ? 'mlss' : 'lt1', ...vd } : null;
 }
 /**
+ * The two-lap LT1 check (v1.1.17). lap 1 = the value after 10 min at the test speed, end = the value after lap 2 (30 min);
+ * line = lowest + 0.5 (lowest = lowest in-test lactate of the latest step test, else the resting baseline).
+ *   pass       lap 1 ≤ line and rise (lap 1 → end) ≤ 0.5 (≤ 0.3 when the gap exceeded 3 min: lactate clears while standing) → next week +0.2 km/h
+ *   borderline rise 0.5–1.0, or lap 1 within 0.2 of the line → same speed next week (target HR −2)
+ *   fail       lap 1 > line, rise > 1.0 or end > 2.5 → next week −0.3 km/h (target HR −4)
+ * durability: the level passed (lap 1 ≤ line) but the 30 min did not hold (rise > 0.5, or lap-2 drift > 8 bpm) — a duration problem, not a speed one.
+ * No zone change follows from one run: the band finder moves the band after two consecutive results (bandFinder).
+ */
+function twoLapVerdict(session, c, tl) {
+  const sp = session.speed; const spTxt = Number.isFinite(sp) ? ` @ ${sp} km/h` : '';
+  const fl = lactateFloor(); const lowest = fl ? r1(fl.lowest) : 0.8; const line = r1(lowest + LINE_DELTA);
+  const lineKo = fl ? (fl.from === 'test' ? `계단 검사 최저 ${lowest.toFixed(1)} + 0.5 = ${line}` : `기준 안정 시 ${lowest.toFixed(1)} + 0.5 = ${line}`) : `0.8 + 0.5 = ${line} (기준값 없음)`;
+  const lineEn = fl ? (fl.from === 'test' ? `test lowest ${lowest.toFixed(1)} + 0.5 = ${line}` : `resting baseline ${lowest.toFixed(1)} + 0.5 = ${line}`) : `0.8 + 0.5 = ${line} (no baseline set)`;
+  const ls = lapStats(session, tl); const gap = tl.gapSec; const strict = gap != null && gap > GAP_STRICT_SEC; const gapTxt = gap != null ? `${Math.round(gap)}초` : '?'; const gapEn = gap != null ? `${Math.round(gap)} s` : '?';
+  const base = { twoLap: true, line, lowest, lineFrom: fl ? fl.from : null, gapSec: gap, strict, lap1: c.mid, end: c.end, lap1Hr: ls ? ls.lap1Hr : NaN, lap2Drift: ls ? ls.lap2Drift : NaN, lap2Min: ls ? ls.lap2Min : NaN };
+  if (c.mid == null) return { ...base, level: 'near', adjust: null, next: 0, ko: `랩 1 값이 없습니다 — 종료 ${c.end}만으로는 두 랩 판정을 내리지 않습니다${spTxt}. 간격에서 찍은 값을 카드의 「랩 1」 칸에 적으세요(없으면 다음 주 같은 속도).`, en: `No lap-1 value — the end value ${c.end} alone gives no two-lap verdict${spTxt}. Enter the value taken in the gap in the card's "lap 1" field (or repeat next week at the same speed).` };
+  const rise = r1(c.end - c.mid); const passRise = strict ? STRICT_RISE : PASS_RISE; const f1 = v => r1(v).toFixed(1);
+  const levelFail = c.mid > line + 1e-9, endFail = c.end > END_MAX, riseFail = rise > FAIL_RISE;
+  const drift = ls && Number.isFinite(ls.lap2Drift) ? ls.lap2Drift : NaN; const dTxt = Number.isFinite(drift) ? ` · 랩 2 드리프트 ${drift >= 0 ? '+' : ''}${drift.toFixed(0)} bpm` : '', dEn = Number.isFinite(drift) ? ` · lap-2 drift ${drift >= 0 ? '+' : ''}${drift.toFixed(0)} bpm` : '';
+  const durability = !levelFail && !endFail && (rise > PASS_RISE || drift > 8);
+  const lapTxt = `랩 1 ${f1(c.mid)} → 종료 ${f1(c.end)} (상승 ${rise >= 0 ? '+' : ''}${rise.toFixed(1)}, 간격 ${gapTxt})${dTxt}`, lapEn = `lap 1 ${f1(c.mid)} → end ${f1(c.end)} (rise ${rise >= 0 ? '+' : ''}${rise.toFixed(1)}, gap ${gapEn})${dEn}`;
+  const strictKo = strict ? ' 간격이 3분을 넘어 엄격 규칙(상승 ≤ 0.3)을 적용했습니다.' : '', strictEn = strict ? ' The gap exceeded 3 min, so the strict rule (rise ≤ 0.3) was applied.' : '';
+  const durKo = durability ? ' 수준은 통과(랩 1이 기준선 아래)했지만 30분을 버티지 못했습니다 — 속도가 아니라 지구력의 문제: 롱런 시간·보급을 점검하세요.' : '', durEn = durability ? ' The level passed (lap 1 under the line) but the 30 min did not hold — a durability problem, not a speed one: look at long-run duration and fuelling.' : '';
+  if (levelFail || endFail || riseFail) {
+    const why = levelFail ? [`랩 1 ${f1(c.mid)} > 기준선 ${line}`, `lap 1 ${f1(c.mid)} > line ${line}`] : endFail ? [`종료 ${f1(c.end)} > 2.5`, `end ${f1(c.end)} > 2.5`] : [`상승 ${rise.toFixed(1)} > 1.0`, `rise ${rise.toFixed(1)} > 1.0`];
+    return { ...base, level: 'high', adjust: { lt1Hr: -4 }, next: -0.3, rise, durability, ko: `실패${spTxt}: ${why[0]} — ${lapTxt}. 기준선 ${lineKo}. 다음 주 검사 속도 −0.3 km/h, 목표 심박 −4 bpm.${durKo}${strictKo}`, en: `Fail${spTxt}: ${why[1]} — ${lapEn}. Line ${lineEn}. Next week's test speed −0.3 km/h, target HR −4 bpm.${durEn}${strictEn}` };
+  }
+  if (rise > passRise || c.mid >= line - NEAR_LINE - 1e-9) {
+    const why = rise > passRise ? [`상승 ${rise.toFixed(1)} > ${passRise}`, `rise ${rise.toFixed(1)} > ${passRise}`] : [`랩 1 ${f1(c.mid)}이 기준선 ${line}의 0.2 이내`, `lap 1 ${f1(c.mid)} within 0.2 of the line ${line}`];
+    return { ...base, level: 'near', adjust: { lt1Hr: -2 }, next: 0, rise, durability, ko: `경계${spTxt}: ${why[0]} — ${lapTxt}. 기준선 ${lineKo}. 다음 주 같은 속도로 재검, 목표 심박 −2 bpm.${durKo}${strictKo}`, en: `Borderline${spTxt}: ${why[1]} — ${lapEn}. Line ${lineEn}. Repeat next week at the same speed, target HR −2 bpm.${durEn}${strictEn}` };
+  }
+  return { ...base, level: 'ok', adjust: null, next: +0.2, rise, durability, ko: `통과${spTxt}: ${lapTxt} — 랩 1 ≤ 기준선 ${line}, 상승 ≤ ${passRise}. 기준선 ${lineKo}. 다음 주 검사 속도 +0.2 km/h(계단 검사 LT1 + 0.3까지).${strictKo}`, en: `Pass${spTxt}: ${lapEn} — lap 1 ≤ line ${line}, rise ≤ ${passRise}. Line ${lineEn}. Next week's test speed +0.2 km/h (up to the step-test LT1 + 0.3).${strictEn}` };
+}
+/**
+ * The weekly band finder (v1.1.17): from the two-lap runs (newest last) the next test speed — pass +0.2 (up to the step-test LT1 speed
+ * + 0.3), borderline the same, fail −0.3 — and, after two consecutive results of the same kind, the band change: two passes raise the
+ * LT1 floor to the passed speed and lap-1 heart rate; two fails lower the cap to speed −0.3 / heart rate −4; borderline changes nothing.
+ * → { nextSpeed, step, from: 'result' | 'zones', last: { date, speed, level }, streak: { level, n } | null, change: { zones, keys, ko, en } | null, ko, en }
+ */
+export function bandFinder(sessions, zones, { days = 70, now = Date.now() } = {}) {
+  const z = zones || {}; const zSpeed = Number.isFinite(z.lt1Speed) ? z.lt1Speed : null;
+  const runs = (sessions || []).filter(s => s && s.type === 'verify' && s.final && s.sourceKind !== 'demo' && (s.purpose || 'lt1') === 'lt1' && Number.isFinite(s.speed) && now - s.startedAt <= days * 86400000).sort((a, b) => a.startedAt - b.startedAt);
+  const results = []; for (const s of runs) { const vd = lactateVerdict(s); if (vd && vd.twoLap && vd.lap1 != null) results.push({ s, vd }); }
+  if (!results.length) return { nextSpeed: zSpeed, step: 0, from: 'zones', last: null, streak: null, change: null, results, ko: zSpeed != null ? `아직 두 랩 검증 결과가 없습니다 — 이번 주 검사 속도는 현재 LT1 속도 ${zSpeed.toFixed(1)} km/h.` : '아직 두 랩 검증 결과가 없습니다.', en: zSpeed != null ? `No two-lap result yet — this week's test speed is the current LT1 speed, ${zSpeed.toFixed(1)} km/h.` : 'No two-lap result yet.' };
+  const last = results[results.length - 1]; const step = last.vd.next || 0;
+  const cap = Number.isFinite(z.testLt1Speed) ? r1(z.testLt1Speed + 0.3) : (zSpeed != null ? r1(zSpeed + 0.3) : null);
+  let next = r1(last.s.speed + step); let capped = false; if (step > 0 && cap != null && next > cap) { next = Math.max(last.s.speed, cap); capped = true; }
+  let n = 1; for (let i = results.length - 2; i >= 0 && results[i].vd.level === last.vd.level; i--) n++;
+  const streak = { level: last.vd.level, n };
+  let change = null;
+  if (n >= 2 && zones) {
+    const out = { ...z }; const hr = Number.isFinite(last.vd.lap1Hr) ? Math.round(last.vd.lap1Hr) : NaN;
+    if (last.vd.level === 'ok') { const v = r1(last.s.speed); if (!(z.lt1Speed >= v)) out.lt1Speed = v; if (Number.isFinite(hr) && !(z.lt1Hr >= hr)) out.lt1Hr = hr; }
+    else if (last.vd.level === 'high') { const v = r1(last.s.speed - 0.3); if (!(z.lt1Speed <= v)) out.lt1Speed = v; if (Number.isFinite(hr) && !(z.lt1Hr <= hr - 4)) out.lt1Hr = hr - 4; }
+    const keys = ['lt1Hr', 'lt1Speed'].filter(k => out[k] !== z[k] && Number.isFinite(out[k]));
+    if (keys.length) { const fmt = k => `LT1 ${k === 'lt1Hr' ? `${Number.isFinite(z.lt1Hr) ? Math.round(z.lt1Hr) : '–'}→${out.lt1Hr} bpm` : `${Number.isFinite(z.lt1Speed) ? z.lt1Speed : '–'}→${out.lt1Speed} km/h`}`; const txt = keys.map(fmt).join(', '); change = { zones: out, keys, ko: txt, en: txt }; }
+  }
+  const lv = { ok: ['통과', 'pass'], near: ['경계', 'borderline'], high: ['실패', 'fail'] }[last.vd.level] || [last.vd.level, last.vd.level];
+  const d = new Date(last.s.startedAt); const dTxt = `${d.getMonth() + 1}/${d.getDate()}`;
+  const stepTxt = step > 0 ? `+${step.toFixed(1)}` : step < 0 ? step.toFixed(1) : '±0';
+  const ko = `최근 검증(${dTxt}, ${last.s.speed} km/h): ${lv[0]} → 이번 주 검사 속도 ${next.toFixed(1)} km/h (${stepTxt}${capped ? ', 계단 검사 LT1 + 0.3 상한' : ''}).` + (n >= 2 ? ` ${lv[0]} ${n}주 연속${change ? ` → 범위 변경 가능: ${change.ko}` : ' — 현재 존과 모순 없음'}.` : ' 범위는 두 주 연속 같은 결과일 때만 바뀝니다.');
+  const en = `Latest check (${dTxt}, ${last.s.speed} km/h): ${lv[1]} → this week's test speed ${next.toFixed(1)} km/h (${stepTxt}${capped ? ', capped at the step-test LT1 + 0.3' : ''}).` + (n >= 2 ? ` ${lv[1]} ${n} weeks running${change ? ` → band change available: ${change.en}` : ' — consistent with the current zones'}.` : ' The band moves only after two consecutive results of the same kind.');
+  return { nextSpeed: next, step, from: 'result', capped, last: { date: last.s.startedAt, speed: last.s.speed, level: last.vd.level, id: last.s.id }, streak, change, results, ko, en };
+}
+/**
  * Interval sessions (LT2 mode, more than one rep). The recoveries clear lactate, so the samples tell whether the reps were at the
  * intended intensity (3–4.5 mmol/L after the last rep, not climbing from rep to rep) — not where LT1 or MLSS lies. Neither the
  * 10→30-min rise rule nor the heart-rate proxy nor the LT1 limits apply, whatever purpose is chosen, and no zone change follows.
@@ -296,13 +430,19 @@ function verdictCore(session, c, isMlss) {
   const restUsed = c.rest != null ? c.rest : REST_BASELINE; const fromBase = c.rest == null && restUsed != null;
   const rise = restUsed != null ? c.end - restUsed : null; const delta = c.mid != null ? c.end - c.mid : null;
   const riseKo = rise != null ? ` (${fromBase ? `기준 안정 시 ${restUsed} 대비` : '안정 시'} ${rise >= 0 ? '+' : ''}${rise.toFixed(1)})` : '', riseEn = rise != null ? ` (${rise >= 0 ? '+' : ''}${rise.toFixed(1)} over ${fromBase ? `the resting baseline ${restUsed}` : 'rest'})` : '';
-  const bouts = session.type === 'test' ? 1 : runTimeline(session).bouts;
+  const tl = session.type === 'test' ? null : runTimeline(session); const bouts = tl ? tl.bouts : 1;
   if (bouts === 0) return { level: 'near', adjust: null, intervals: true, ko: `워밍업 중에 끝난 세션입니다 — 젖산 ${c.end}은 기록만 하고 판정하지 않습니다.`, en: `The session ended in the warm-up — lactate ${c.end} is kept on record, no verdict.` };
+  if (tl && tl.twoLap && !isMlss) return twoLapVerdict(session, c, tl);
   if (bouts > 1) return intervalVerdict(c, spTxt, delta);
   if (isMlss) {
     if (delta != null) {
-      if (delta <= 1.0 && c.end < 8) return { level: 'ok', adjust: { lt2Speed: +0.3 }, ko: `MLSS 이하 확인${spTxt}: ${midLabel(c).ko}→종료 상승 ${delta.toFixed(1)} mmol/L (≤1.0). 다음 검증은 +0.3 km/h.`, en: `At/below MLSS${spTxt}: ${midLabel(c).en}→end rise ${delta.toFixed(1)} mmol/L (≤1.0). Next verification +0.3 km/h.` };
-      return { level: 'high', adjust: { lt2Speed: -0.4 }, ko: `MLSS 초과${spTxt}: ${midLabel(c).ko}→종료 상승 ${delta.toFixed(1)} mmol/L (>1.0). LT2 속도를 0.3~0.5 km/h 낮추세요.`, en: `Above MLSS${spTxt}: rise ${delta.toFixed(1)} mmol/L (>1.0). Lower the LT2 speed by 0.3–0.5 km/h.` };
+      // MLSS from the 10-min → end rise (v1.1.17): ≤ 0.5 → at/below MLSS, next +0.3 km/h — unless the belt stood for more than 3 min for
+      // the sample (lactate clears while standing: the rise is understated — hold the speed); 0.5–1.0 → this speed IS the MLSS, hold it; > 1.0 → above.
+      const gap = midStopSec(session, tl); const longGap = gap != null && gap > GAP_STRICT_SEC; const gapKo = gap != null ? ` (채혈 정지 ${Math.round(gap)}초)` : '', gapEn = gap != null ? ` (stop for the sample ${Math.round(gap)} s)` : '';
+      if (delta <= 0.5 && c.end < 8) return longGap ? { level: 'ok', adjust: null, hold: true, longGap: true, ko: `MLSS 이하 확인${spTxt}: ${midLabel(c).ko}→종료 상승 ${delta.toFixed(1)} mmol/L (≤0.5)${gapKo} — 정지가 3분을 넘어 상승이 과소평가됐을 수 있습니다. 상향 없이 같은 속도로 재검.`, en: `At/below MLSS${spTxt}: ${midLabel(c).en}→end rise ${delta.toFixed(1)} mmol/L (≤0.5)${gapEn} — the stop exceeded 3 min, so the rise may be understated. No raise: repeat at this speed.` }
+        : { level: 'ok', adjust: { lt2Speed: +0.3 }, ko: `MLSS 이하 확인${spTxt}: ${midLabel(c).ko}→종료 상승 ${delta.toFixed(1)} mmol/L (≤0.5)${gapKo}. 다음 검증은 +0.3 km/h.`, en: `At/below MLSS${spTxt}: ${midLabel(c).en}→end rise ${delta.toFixed(1)} mmol/L (≤0.5)${gapEn}. Next verification +0.3 km/h.` };
+      if (delta <= 1.0 && c.end < 8) return { level: 'ok', adjust: null, hold: true, ko: `MLSS 확인${spTxt}: ${midLabel(c).ko}→종료 상승 ${delta.toFixed(1)} mmol/L (0.5–1.0)${gapKo} — 이 속도가 MLSS입니다. 속도 유지(상향 없음).`, en: `MLSS confirmed${spTxt}: ${midLabel(c).en}→end rise ${delta.toFixed(1)} mmol/L (0.5–1.0)${gapEn} — this speed is the MLSS. Hold it (no raise).` };
+      return { level: 'high', adjust: { lt2Speed: -0.4 }, ko: `MLSS 초과${spTxt}: ${midLabel(c).ko}→종료 상승 ${delta.toFixed(1)} mmol/L (>1.0)${gapKo}. LT2 속도를 0.4 km/h 낮추세요.`, en: `Above MLSS${spTxt}: rise ${delta.toFixed(1)} mmol/L (>1.0)${gapEn}. Lower the LT2 speed by 0.4 km/h.` };
     }
     if (c.end >= 6) return { level: 'high', adjust: { lt2Speed: -0.4 }, ko: `종료 젖산 ${c.end} — LT2 위일 가능성${spTxt}. 10분 샘플을 추가하면 판정이 확실해집니다.`, en: `End lactate ${c.end} — likely above LT2${spTxt}. Add a 10-min sample next time for a firm call.` };
     if (c.end < 3) return { level: 'low', adjust: { lt2Speed: +0.3 }, ko: `종료 젖산 ${c.end} — LT2 아래${spTxt}. 다음엔 +0.3 km/h.`, en: `End lactate ${c.end} — below LT2${spTxt}. Try +0.3 km/h next time.` };
@@ -343,7 +483,7 @@ function verdictCore(session, c, isMlss) {
  * would move the zone to a wrong place; the speed part does not depend on it. Interval sessions change nothing.
  */
 export function verdictZoneChange(zones, session, vd = lactateVerdict(session)) {
-  if (!vd || vd.intervals || vd.longRun) return null; const z = zones || {}; const ew = endWindowStats(session, 300); const sp = session.speed;
+  if (!vd || vd.intervals || vd.longRun || vd.twoLap) return null; const z = zones || {}; const ew = endWindowStats(session, 300); const sp = session.speed; // (two-lap LT1 runs: the band finder, after two consecutive results)
   const hr = ew.sure && Number.isFinite(ew.hr) ? Math.round(ew.hr) : NaN; const out = { ...z }; const r1 = v => Math.round(v * 10) / 10;
   const up = (k, v) => { if (Number.isFinite(v) && !(z[k] >= v)) out[k] = v; }; const down = (k, v) => { if (Number.isFinite(v) && !(z[k] <= v)) out[k] = v; };
   if (vd.kind === 'mlss') {
@@ -361,14 +501,16 @@ export function verdictZoneChange(zones, session, vd = lactateVerdict(session)) 
   return { zones: out, keys, ko: txt, en: txt };
 }
 /**
- * Multi-day lactate curve: constant-speed sessions (last `days`; demo and interval sessions excluded) with an end sample → lactate
- * vs speed (+ end-HR). A run whose end is uncertain gives its lactate but not its heart rate (unsure: true); for the thresholds its
- * heart rate is read off the other runs.
+ * Multi-day lactate curve: constant-speed sessions (last `days`; demo and interval sessions excluded) → lactate vs speed (+ HR).
+ * v1.1.17 rules: a two-lap run is a point by its end value (lap 2 of 20–35 min) with the heart rate of lap-1 minutes 5–10; a single
+ * constant run of 15–35 min by its end value with the heart rate of minutes 8–13 (before the drift); a run of more than 35 min at
+ * speed is a durability reading, not a point — unless a mid sample was taken 20–35 min in (that value, same heart-rate window).
+ * A run whose end is uncertain gives its lactate; its heart rate (read early in the run) stands when the run plainly lasted that long.
  */
 export function multiDayCurve(sessions, { days = 60, incline = null } = {}) {
   const now = Date.now(); const pts = [];
   // skipped: recent real sessions that carry lactate but are not a point, with the reason — shown under the curve, so nothing drops out unseen
-  const skipped = []; const skip = (s, why, c = {}) => skipped.push({ id: s.id, date: s.startedAt, x: s.speed, why, mid: c.mid ?? null, midMin: c.midMin ?? null });
+  const skipped = []; const skip = (s, why, c = {}, extra = {}) => skipped.push({ id: s.id, date: s.startedAt, x: s.speed, why, mid: c.mid ?? null, midMin: c.midMin ?? null, ...extra });
   for (const s of sessions) {
     if (!s || s.type === 'test' || s.sourceKind === 'demo') continue; // demo (virtual strap) sessions are practice, not data
     if (now - s.startedAt > days * 86400000) continue;
@@ -376,20 +518,28 @@ export function multiDayCurve(sessions, { days = 60, incline = null } = {}) {
     const c = lactateChecks(s); if (c.end == null && c.mid == null) continue; // no lactate at all: not a verification run
     if (!s.final) { skip(s, 'unfinished', c); continue; }
     if (!Number.isFinite(s.speed)) { skip(s, 'no-speed', c); continue; }
+    const tl = runTimeline(s);
+    if (tl.twoLap) {
+      const ls = lapStats(s, tl);
+      if (c.end == null) { skip(s, 'no-end', c); continue; }
+      if (ls.lap2Min > CURVE_MAX_MIN + 0.75) { skip(s, 'durability', c, { atMin: Math.round(ls.lap2Min) }); continue; } // (45 s of grace: a 35-min lap whose stop the heart rate timed a little late is still a 35-min lap)
+      if (ls.lap2Min < 20 - 0.5) { skip(s, 'too-short', c, { atMin: Math.round(ls.lap2Min) }); continue; }
+      pts.push({ x: s.speed, la: c.end, hr: ls.lap1Hr, alpha1: NaN, unsure: !tl.sure, from: 'lap2', atMin: Math.round(ls.lap2Min), lap1: c.mid, id: s.id, date: s.startedAt, incline: s.incline });
+      continue;
+    }
     const w = endWindowStats(s, 300);
     if (w.bouts !== 1) { skip(s, 'intervals', c); continue; } // intervals: lactate after reps with recoveries is not a point of the constant-speed curve
-    const px = endOnlyProxy(s);
-    if (px.sure && px.durMin > LONG_RUN_MIN) {
-      // a long run: its end value carries the duration (drift, fluids, glycogen), not the speed. A sample taken 20–45 min in, while the
-      // run was still going, is comparable with a 30–35-min check — that one is the point, with the heart rate of the 5 min of running before it.
-      if (!(c.mid != null && Number.isFinite(c.midMin) && c.midMin >= 20 && c.midMin <= 45)) { skip(s, 'long-no-mid', c); continue; }
-      const tl = runTimeline(s); const smp = tl.samples.find(x => x.role === 'mid'); const stopT = (smp && !Number.isFinite(s.midMinTyped)) ? (Number.isFinite(smp.stopT) ? smp.stopT : smp.t) : s.startedAt + c.midMin * 60000; // a typed minute (or no logged sample): that minute
-      const hrs = list(s.hrLive).filter(p => p[1] > 0 && p[0] >= stopT - 300000 && p[0] <= stopT && !inStop(tl, p[0])).map(p => p[1]);
-      pts.push({ x: s.speed, la: c.mid, hr: hrs.length ? mean(hrs) : NaN, alpha1: NaN, unsure: false, from: 'mid', atMin: c.midMin, id: s.id, date: s.startedAt, incline: s.incline });
+    const px = endOnlyProxy(s); const hrEarly = earlyWindowHr(s, tl);
+    if (px.sure && px.durMin > CURVE_MAX_MIN + 0.75) {
+      // more than 35 min at speed: the end value carries the duration (drift, fluids, glycogen), not the speed — a durability reading.
+      // A sample taken 20–35 min in, while the run was still going, is comparable with a 30-min check — that one is the point.
+      if (!(c.mid != null && Number.isFinite(c.midMin) && c.midMin >= 20 && c.midMin <= CURVE_MAX_MIN)) { skip(s, 'durability', c, { atMin: Math.round(px.durMin) }); continue; }
+      pts.push({ x: s.speed, la: c.mid, hr: hrEarly, alpha1: NaN, unsure: false, from: 'mid', atMin: c.midMin, id: s.id, date: s.startedAt, incline: s.incline });
       continue;
     }
     if (c.end == null) { skip(s, 'no-end', c); continue; }
-    pts.push({ x: s.speed, la: c.end, hr: w.sure ? w.hr : NaN, alpha1: w.sure ? w.alpha1 : NaN, unsure: !w.sure, id: s.id, date: s.startedAt, incline: s.incline });
+    if (px.sure && px.durMin < CURVE_MIN_MIN) { skip(s, 'too-short', c, { atMin: Math.round(px.durMin) }); continue; }
+    pts.push({ x: s.speed, la: c.end, hr: hrEarly, alpha1: w.sure ? w.alpha1 : NaN, unsure: !w.sure, from: 'end', atMin: Math.round(px.durMin), id: s.id, date: s.startedAt, incline: s.incline });
   }
   // one point per speed: keep the most recent
   const bySpeed = new Map(); for (const p of pts.sort((a, b) => a.date - b.date)) bySpeed.set(p.x, p);

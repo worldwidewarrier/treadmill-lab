@@ -18,7 +18,8 @@ check('LT1 end 1.8 → ok', lactateVerdict(mk('lt1', 9, { rest: 1.0, end: 1.8 })
 check('LT1 end 2.3 → near (−2)', (() => { const v = lactateVerdict(mk('lt1', 9.5, { end: 2.3 })); return v.level === 'near' && v.adjust.lt1Hr === -2; })());
 check('LT1 end 3.1 → high (−4)', (() => { const v = lactateVerdict(mk('lt1', 10, { end: 3.1 })); return v.level === 'high' && v.adjust.lt1Hr === -4; })());
 // LT2 / MLSS verdicts
-check('LT2 Δ 0.6 → ok (+0.3)', (() => { const v = lactateVerdict(mk('lt2', 12, { mid: 3.4, end: 4.0 })); return v.level === 'ok' && v.adjust.lt2Speed === 0.3; })());
+check('LT2 Δ 0.6 → MLSS confirmed, hold (no raise; v1.1.17)', (() => { const v = lactateVerdict(mk('lt2', 12, { mid: 3.4, end: 4.0 })); return v.level === 'ok' && v.adjust === null && v.hold === true && /hold/i.test(v.en); })());
+check('LT2 Δ 0.4 → ok (+0.3)', (() => { const v = lactateVerdict(mk('lt2', 12.2, { mid: 3.6, end: 4.0 })); return v.level === 'ok' && v.adjust.lt2Speed === 0.3; })());
 check('LT2 Δ 1.8 → high (−0.4)', (() => { const v = lactateVerdict(mk('lt2', 12.5, { mid: 3.8, end: 5.6 })); return v.level === 'high' && v.adjust.lt2Speed === -0.4; })());
 check('LT2 end-only 6.5 → high', lactateVerdict(mk('lt2', 13, { end: 6.5 })).level === 'high');
 check('no end sample → null', lactateVerdict(mk('lt1', 9, { rest: 1.0 })) === null);
