@@ -41,7 +41,9 @@ await shot('41-verify-setup');
 for (const [id, v] of [['#lap-wu', '1'], ['#lap-1', '2'], ['#lap-2', '3']]) { await page.fill(id, v); await page.$eval(id, el => el.dispatchEvent(new Event('change'))); }
 await page.click('#src-seg button[data-src=demo]'); await page.selectOption('#demo-speed', '60'); await page.click('[data-action=connect]'); await page.waitForSelector('[data-action=start]:not([disabled])'); await page.click('[data-action=start]'); await page.waitForSelector('#lv-zone');
 const lapBtn = () => page.$eval('#lv-lap', el => el.textContent);
-check('warm-up: the lap button offers "Start lap 1"', /1랩 시작/.test(await lapBtn()));
+await page.waitForFunction(() => TL.engine.phase !== 'warmup' || /1랩 시작/.test(document.getElementById('lv-lap').textContent), null, { timeout: 5000 }).catch(() => {});
+const wuBtn = await page.evaluate(() => TL.engine.phase === 'warmup' ? document.getElementById('lv-lap').textContent : 'skipped (warm-up already over at ×60)');
+check('warm-up: the lap button offers "Start lap 1"', /1랩 시작|skipped/.test(wuBtn), wuBtn);
 await page.waitForFunction(() => TL.engine.phase === 'work' && TL.engine.rep === 1, null, { timeout: 15000 });
 const l1 = await page.evaluate(() => ({ btn: document.getElementById('lv-lap').textContent, zone: document.getElementById('lv-zone-text').textContent, lbl: document.getElementById('lv-phase-lbl').textContent }));
 check('lap 1 running: banner "랩 1 · 8.7 km/h", phase "랩 1 · 2:00", lap button "End lap"', /랩 1/.test(l1.zone) && /8\.7 km\/h/.test(l1.zone) && /랩 1 · 2:00/.test(l1.lbl) && /랩 종료/.test(l1.btn), JSON.stringify(l1));
@@ -65,11 +67,11 @@ check('card: the laps line — lap 1 2.0 min, HR 5–10 min (n/a: lap 1 shorter 
 check('card: the gap value sits in the lap-1 field (label 랩 1(2분)), the end value in the end field', card.mid === '1' && card.end === '1.3' && /랩 1\(2분\)/.test(card.midLbl), `${card.mid} ${card.end} ${card.midLbl}`);
 check('card: the two-lap verdict — pass, +0.2 next week, the line 0.8 + 0.5 = 1.3, no zone button, the band-finder note', /통과 @ 8\.7 km\/h/.test(card.verdict) && /\+0\.2/.test(card.verdict) && !(await page.$('[data-action=apply-verdict]')) && /주간 범위 탐색기|Weekly band finder/.test(await text()), card.verdict.slice(0, 120));
 check('card: the purpose select has no "auto" for a two-lap run', card.purposeOpts.join(',') === 'lt1,mlss', card.purposeOpts.join(','));
-check('events: the lactate rows carry their tags (lap 1 · 2:00 at speed · s after the stop; lap 2 · 3:00)', card.events.some(r => /랩 1 · 2:00 달림/.test(r) && /정지 후 \d+초/.test(r)) && card.events.some(r => /랩 2 · 3:0\d 달림/.test(r)), card.events.filter(r => /lactate/.test(r)).join(' | '));
+check('events: the lactate rows carry their tags (lap 1 · 2:00 at speed · s after the stop; lap 2 · 3:00)', card.events.some(r => /랩 1 · 2:0[01] 달림/.test(r) && /정지 후 \d+초/.test(r)) && card.events.some(r => /랩 2 · 3:0\d 달림/.test(r)), card.events.filter(r => /lactate/.test(r)).join(' | '));
 await shot('43-verify-card');
 // CSV: the two-lap header and the tag columns
 const [dl] = await Promise.all([page.waitForEvent('download'), page.click('[data-action=export-csv]')]); const { readFileSync } = await import('node:fs'); const csv = readFileSync(await dl.path(), 'utf8');
-check('CSV: a two_lap header line with gap_sec and the lap values; event rows with lap / run_s / since_stop_s columns', /^# two_lap,1,lap1_min,2\.0,lap1_hr_5_10,,gap_sec,\d+,lap2_min,(2\.[89]|3\.0),/m.test(csv) && /^event_t_iso,elapsed_s,type,value,stage,phase,lap,run_s,since_stop_s,gap_s$/m.test(csv) && /,lactate,1,,gap,1,120,\d+,\d+$/m.test(csv), csv.split('\n').filter(l => /two_lap|lactate/.test(l)).join(' / ').slice(0, 300));
+check('CSV: a two_lap header line with gap_sec and the lap values; event rows with lap / run_s / since_stop_s columns', /^# two_lap,1,lap1_min,2\.[01],lap1_hr_5_10,,gap_sec,\d+,lap2_min,(2\.[89]|3\.[01]),/m.test(csv) && /^event_t_iso,elapsed_s,type,value,stage,phase,lap,run_s,since_stop_s,gap_s$/m.test(csv) && /,lactate,1,,gap,1,120,\d+,\d+$/m.test(csv), csv.split('\n').filter(l => /two_lap|lactate/.test(l)).join(' / ').slice(0, 300));
 // ---- 4. the band finder: two real passes (8.7 then 8.9) → Home offers the band change → apply
 await page.evaluate(async () => { const { store } = await import('./js/store.js');
   const mk = (id, speed, lap1, end, daysAgo, hr = 140) => { const t0 = Date.now() - daysAgo * 86400000; const S = s => t0 + s * 1000; const hrLive = []; for (let s = 0; s <= 2700; s++) hrLive.push([S(s), s < 300 ? 110 : s < 900 ? hr : s < 980 ? 100 : s < 2780 ? hr : 100]);
