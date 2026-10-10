@@ -19,6 +19,7 @@ export const DEFAULT_INTERVALS = { warmupSec: 600, reps: 4, workSec: 480, restSe
  * 20 min for the MLSS variant) → end sample before any cool-down. gapCapSec / sampleAtSec drive the voice cues.
  */
 export const DEFAULT_LAPS = { warmupSec: 300, lap1Sec: 600, lap2Sec: 1800, gapCapSec: 180, sampleAtSec: 30 };
+export const JUDGE_FROM_SEC = 600; // LT1 session: the heart-rate band is judged from minute 10 (no zone cues during the 0–5-min easy jog and the ramp)
 /** Minutes of an LT1 session after which the heart-rate ceiling is LT1 + 5 (drift allowed) rather than the band's upper edge. */
 export const LATE_FROM_SEC = 1200;
 
@@ -259,12 +260,14 @@ export class SessionEngine {
     this.tiz.totalSec += this.stepSec;
     // LT1 session (v1.1.17): speed is the dose. After LATE_FROM_SEC of running the ceiling is LT1 + 5 (ceilHr) — the drift of a
     // steady run is allowed — and crossing it for a minute brings the "slow down 0.3" cue instead of the band's zone-high cue.
-    const late = this.mode === 'lt1' && Number.isFinite(T.ceilHr) && (now - this.startedAt - this.pauseAccum) / 1000 >= (T.lateFromSec ?? LATE_FROM_SEC);
+    const runSec = (now - this.startedAt - this.pauseAccum) / 1000;
+    const late = this.mode === 'lt1' && Number.isFinite(T.ceilHr) && runSec >= (T.lateFromSec ?? LATE_FROM_SEC);
+    const grace = this.mode === 'lt1' && runSec < (T.judgeFromSec ?? JUDGE_FROM_SEC); // v1.1.20: the band is judged from minute 10 — the warm-up ramp (0–5 min easy jog) gives no zone cues
     const hi = late ? T.ceilHr : T.hrHi;
     let z = 'in'; if (hr > hi) z = 'above'; else if (hr < T.hrLo) z = 'below'; else this.tiz.inSec += this.stepSec;
     if (late && z === 'in' && hr > T.hrHi) z = 'drift'; // above the band, under the ceiling: shown, not cued
     const A = this.alerts, exitSec = this.settings.alerts?.zoneExitSec ?? 30;
-    if (z === 'in' || z === 'drift') this.outsideSince = 0; else { if (!this.outsideSince) this.outsideSince = now; if ((now - this.outsideSince) / 1000 >= (late && z === 'above' ? 60 : exitSec)) { if (late && z === 'above') A?.cue(VOICE.ceiling(), { beep: 'low', vib: [150, 100, 150], key: 'ceil', minGapSec: 180 }); else A?.cue(z === 'above' ? VOICE.zone_high() : VOICE.zone_low(), { beep: z === 'above' ? 'low' : 'high', vib: [150, 100, 150], key: 'zone', minGapSec: 60 }); } }
+    if (z === 'in' || z === 'drift' || grace) this.outsideSince = 0; else { if (!this.outsideSince) this.outsideSince = now; if ((now - this.outsideSince) / 1000 >= (late && z === 'above' ? 60 : exitSec)) { if (late && z === 'above') A?.cue(VOICE.ceiling(), { beep: 'low', vib: [150, 100, 150], key: 'ceil', minGapSec: 180 }); else A?.cue(z === 'above' ? VOICE.zone_high() : VOICE.zone_low(), { beep: z === 'above' ? 'low' : 'high', vib: [150, 100, 150], key: 'zone', minGapSec: 60 }); } }
     this.zoneState = z;
     if (this.mode === 'lt1' && this.settings.alpha1?.guidance !== 'off' && Number.isFinite(rec.alpha1) && T.alphaMin) {
       if (rec.alpha1 < T.alphaMin) { if (!this.alphaLowSince) this.alphaLowSince = now; if ((now - this.alphaLowSince) / 1000 >= 60) A?.cue(VOICE.alpha_low(), { beep: 'low', key: 'alpha', minGapSec: 120 }); }

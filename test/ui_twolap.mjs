@@ -28,7 +28,7 @@ check('the fixes run once: a second load changes nothing', again.z === 143 && ag
 let home = await text();
 check('Home shows the weekly LT1 check with the test speed 8.7 km/h and a way into the two-lap mode', /주간 LT1 검증/.test(home) && /8\.7 km\/h/.test(home) && !!(await page.$('[data-action=go-live][data-mode=verify]')), home.slice(0, 80));
 await page.click('#nav button[data-view=plan]'); await page.waitForSelector('.plan-day'); const plan = await text();
-check('Plan: Thursday is the two-lap verification run at 8.7 km/h, with the procedure note; the long run says mid sample at 30 min', /LT1 검증 달리기 \(두 랩, 8\.7 km\/h\)/.test(plan) && /간격 60–90초/.test(plan) && /30분에 중간 채혈/.test(plan), plan.slice(0, 120));
+check('Plan: Thursday is the two-lap verification run at 8.7 km/h, with the procedure note; the long run says mid sample at 30 min', /LT1 검증 달리기 \(두 랩, 8\.7 km\/h\)/.test(plan) && /간격 60–90초/.test(plan) && /30:00에 중간 채혈/.test(plan), plan.slice(0, 120));
 await shot('40-plan-thursday');
 // ---- 3. the two-lap run with the demo strap: warm-up 1 min, lap 1 2 min, lap 2 3 min at ×60
 await page.click('#nav button[data-view=live]'); await page.waitForSelector('#mode-seg'); await page.click('#mode-seg button[data-mode=verify]'); await page.waitForSelector('#lap-1');

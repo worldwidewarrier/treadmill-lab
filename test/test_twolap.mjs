@@ -157,15 +157,19 @@ setRestBaseline(0.8); setTestLowest(null);
 {
   const zones = computeZones({ lt1Hr: 143, lt2Hr: 157, lt1Speed: 8.7, lt2Speed: 10.5, maxHr: 188 }); const T = sessionTargets(zones, 'lt1', { minutes: 50 });
   check('LT1 targets carry the ceiling 148 (LT1 + 5) from minute 20', T.hrLo === 133 && T.hrHi === 140 && T.ceilHr === 148 && T.lateFromSec === 1200, JSON.stringify(T));
+  check('LT1 targets say the band is judged from minute 10 (judgeFromSec 600)', T.judgeFromSec === 600);
   spoken.length = 0; const src = new ClockSource(now); const eng = new SessionEngine({ settings, alerts }); eng.setSource(src); eng.configure({ mode: 'lt1', targets: T, meta: { speed: 8.3, incline: 1 } }); eng.start(); clearInterval(eng.timer);
-  src.run(600, 138); src.run(300, 145);
+  src.run(300, 118); src.run(240, 150);
+  check('0–9 min: a low warm-up heart rate and even 4 min at 150 give no zone cue (judged from minute 10)', !spoken.some(t => /심박/.test(t)), spoken.join(' | '));
+  src.run(60, 138);
+  src.run(300, 145);
   check('minute 10–15 at 145 (above the band 133–140): the zone-high cue, zone "above"', spoken.some(t => /심박 높음/.test(t)) && eng.zoneState === 'above', spoken.join(' | '));
   spoken.length = 0; src.run(LATE_FROM_SEC - 900 + 5, 138); src.run(300, 145);
   check('after minute 20 at 145 (under the ceiling 148): zone "drift", no zone cue (only the halfway cue of the 50-min session)', eng.zoneState === 'drift' && !spoken.some(t => /심박|천장/.test(t)), `${eng.zoneState} ${spoken.join(' | ')}`);
   src.run(120, 150);
   check('150 for 2 min after minute 20: the ceiling cue "slow down 0.3", zone "above"', spoken.some(t => /후반 심박 천장 초과.*0\.3/.test(t)) && eng.zoneState === 'above', spoken.join(' | '));
   const s = eng.stop('user');
-  check('time in zone counts the drift minutes as in zone', s.tiz.inSec >= 600 + 300 + 300 && s.tiz.inSec < s.tiz.totalSec, JSON.stringify(s.tiz));
+  check('time in zone counts the drift minutes as in zone (minute 9–10, 15–20 and the drift minutes 20–25)', s.tiz.inSec >= 60 + 300 + 300 && s.tiz.inSec < 60 + 305 + 300 + 30 && s.tiz.inSec < s.tiz.totalSec, JSON.stringify(s.tiz));
 }
 // ───────────── 6. Weekly plan: Thursday = the verification run; the long-run cap ─────────────
 {
@@ -173,7 +177,7 @@ setRestBaseline(0.8); setTestLowest(null);
   const p = weeklyPlan({ zones, week: 2, weekdayMin: 60, weekendMin: 150, verifySpeed: 8.9 });
   const thu = p.days.find(d => d.day === 4), sat = p.days.find(d => d.day === 6);
   check('Thursday is the two-lap verification run, 45 min, at the band finder\'s speed', thu.type === 'verify' && thu.minutes === 45 && thu.speed === 8.9 && /8\.9 km\/h/.test(thu.en) && /gap 60–90 s/.test(thu.note.en), thu.en);
-  check('Saturday long run 80 min (block week 2: 70 + 10), note: mid sample at 30 min + end sample', sat.minutes === 80 && /mid sample at 30 min/.test(sat.note.en) && p.longCap === null, `${sat.minutes} ${sat.note.en}`);
+  check('Saturday long run 80 min (block week 2: 70 + 10), note: mid sample at 30 min + end sample', sat.minutes === 80 && /mid sample at 30/.test(sat.note.en) && p.longCap === null, `${sat.minutes} ${sat.note.en}`);
   const sessions = [{ final: true, sourceKind: 'ble', startedAt: now - 10 * DAY, endedAt: now - 10 * DAY + 62 * 60000, metrics: { durationSec: 62 * 60 } }, { final: true, sourceKind: 'demo', startedAt: now - 3 * DAY, endedAt: now - 3 * DAY + 150 * 60000, metrics: { durationSec: 9000 } }, { final: true, sourceKind: 'ble', startedAt: now - 40 * DAY, endedAt: now - 40 * DAY + 150 * 60000, metrics: { durationSec: 9000 } }];
   check('longest real run of the last 30 days: 62 min (the demo and the 40-day-old run do not count)', longestRecentMin(sessions) === 62);
   const pc = weeklyPlan({ zones, week: 2, weekdayMin: 60, weekendMin: 150, longestMin: 62 }); const satC = pc.days.find(d => d.day === 6);
