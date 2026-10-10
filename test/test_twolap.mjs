@@ -173,11 +173,12 @@ setRestBaseline(0.8); setTestLowest(null);
   const p = weeklyPlan({ zones, week: 2, weekdayMin: 60, weekendMin: 150, verifySpeed: 8.9 });
   const thu = p.days.find(d => d.day === 4), sat = p.days.find(d => d.day === 6);
   check('Thursday is the two-lap verification run, 45 min, at the band finder\'s speed', thu.type === 'verify' && thu.minutes === 45 && thu.speed === 8.9 && /8\.9 km\/h/.test(thu.en) && /gap 60–90 s/.test(thu.note.en), thu.en);
-  check('Saturday long run 100 min (week 2), note: mid sample at 30 min + end sample', sat.minutes === 100 && /mid sample at 30 min/.test(sat.note.en) && p.longCap === null, `${sat.minutes} ${sat.note.en}`);
+  check('Saturday long run 80 min (block week 2: 70 + 10), note: mid sample at 30 min + end sample', sat.minutes === 80 && /mid sample at 30 min/.test(sat.note.en) && p.longCap === null, `${sat.minutes} ${sat.note.en}`);
   const sessions = [{ final: true, sourceKind: 'ble', startedAt: now - 10 * DAY, endedAt: now - 10 * DAY + 62 * 60000, metrics: { durationSec: 62 * 60 } }, { final: true, sourceKind: 'demo', startedAt: now - 3 * DAY, endedAt: now - 3 * DAY + 150 * 60000, metrics: { durationSec: 9000 } }, { final: true, sourceKind: 'ble', startedAt: now - 40 * DAY, endedAt: now - 40 * DAY + 150 * 60000, metrics: { durationSec: 9000 } }];
   check('longest real run of the last 30 days: 62 min (the demo and the 40-day-old run do not count)', longestRecentMin(sessions) === 62);
   const pc = weeklyPlan({ zones, week: 2, weekdayMin: 60, weekendMin: 150, longestMin: 62 }); const satC = pc.days.find(d => d.day === 6);
   check('the long run is capped at 110 % of 62 = 68 → 70 min (rounded to 5), and the note says so', satC.minutes === 70 && pc.longCap && pc.longCap.cap === 70 && /110 % of the 30-day longest \(62 min\)/.test(satC.note.en), `${satC.minutes} ${satC.note.en}`);
+  check('a cap above the planned long run leaves it alone (block week 4 → 100 min, longest 95 → cap 105)', (() => { const q = weeklyPlan({ zones, week: 1, blockWeek: 4, longestMin: 95 }); return q.days.find(d => d.day === 6).minutes === 100 && q.longCap === null; })());
   check('a longest run above the plan leaves the plan alone', weeklyPlan({ zones, week: 2, longestMin: 120 }).longCap === null);
 }
 // ───────────── 7. α1 artifact gate 3 %; monthly resting-lactate reminder ─────────────

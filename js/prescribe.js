@@ -83,32 +83,99 @@ export function longestRecentMin(sessions, { days = 30, now = Date.now() } = {})
   return best > 0 ? Math.round(best) : null;
 }
 /**
- * Weekly plan for availability: weekdays (Mon–Fri) minutes, weekend minutes; goal 'base' | 'perf' | 'health'.
- * v1.1.17: Thursday is the LT1 verification run (two laps, 45 min; verifySpeed = the band finder's next test speed); the long run is
- * capped at 110 % of the longest run of the last 30 days (longestMin) and takes a mid sample at 30 min plus the end sample.
+ * v1.1.18 — the week calendar of the plan. One line per entry: `YYYY-MM-DD kind note…` — the date is any day of that week (it is rounded
+ * to its Monday). kinds: recovery (the whole week easy: Tuesday easy, long run × 0.7, strength RPE 7) · mlss (Tuesday = the 30-min MLSS
+ * check) · easy (Tuesday easy, reason in the note) · blood (Tuesday easy, Thursday no run: a fasted blood draw; the check skips a week) ·
+ * step (Saturday = the lactate step test instead of the long run). Weeks with recovery / mlss / easy / blood do not count as ladder weeks,
+ * so the LT2 ladder (lt2Structure) goes on where it stopped. Lines without a known kind are ignored; `#` starts a comment.
  */
-export function weeklyPlan({ zones, week = 1, weekdayMin = 60, weekendMin = 150, goal = 'base', lt1Adjust = 0, longestMin = null, verifySpeed = null }) {
-  const rec = isRecoveryWeek(week); const k = rec ? 0.7 : 1;
-  const T1 = sessionTargets(zones, 'lt1', { lt1Adjust }); const T2 = sessionTargets(zones, 'lt2');
-  const easy = T1 ? { hrLo: T1.hrLo - 5, hrHi: T1.hrHi - 4 } : null; const steady = T1 ? { hrLo: T1.hrLo, hrHi: T1.hrHi } : null;
-  let longMin = Math.min(weekendMin, Math.round((90 + 10 * Math.min(week - 1, 12)) * k)); let longCap = null;
-  if (Number.isFinite(longestMin) && longestMin > 0) { const cap = Math.max(30, Math.round(1.1 * longestMin / 5) * 5); if (cap < longMin) { longMin = cap; longCap = { longestMin, cap }; } }
-  const wd = Math.round(Math.min(weekdayMin, 60) * k) - 5; // leave 5 min for transitions
-  const st = lt2Structure(week);
-  const lt2Day = st && !rec ? { type: 'lt2', ko: `LT2 세션 ${st.label.split(' / ')[0]}`, en: `LT2 session ${st.label.split(' / ')[1]}`, minutes: Math.round((st.warmupSec + st.reps * st.workSec + (st.reps - 1) * st.restSec + st.cooldownSec) / 60), hr: T2, structure: st } : { type: 'lt1', ko: '회복 LT1 (쉬움)', en: 'Recovery LT1 (easy)', minutes: Math.round(45 * k), hr: easy };
-  const vs = Number.isFinite(verifySpeed) ? verifySpeed : (zones && Number.isFinite(zones.lt1Speed) ? zones.lt1Speed : null);
-  const days = [
-    { day: 1, type: 'lt1', ko: 'LT1 쉬움', en: 'LT1 easy', minutes: wd, hr: easy },
-    { day: 2, type: 'lt1', ko: 'LT1 안정', en: 'LT1 steady', minutes: wd, hr: steady },
-    { day: 3, ...lt2Day },
-    { day: 4, type: 'verify', ko: `LT1 검증 달리기 (두 랩${vs != null ? `, ${vs.toFixed(1)} km/h` : ''})`, en: `LT1 verification run (two laps${vs != null ? `, ${vs.toFixed(1)} km/h` : ''})`, minutes: 45, hr: steady, speed: vs, note: { ko: '공복 · 쉬운 5분 → 랩 1 10분 → 간격 60–90초(서서, 30–45초 뒤 채혈) → 랩 2 30분 → 종료 채혈', en: 'fasted · 5 min easy → lap 1 10 min → gap 60–90 s (stand still, sample 30–45 s after the stop) → lap 2 30 min → end sample' } },
-    { day: 5, type: 'lt1', ko: 'LT1 안정', en: 'LT1 steady', minutes: wd, hr: steady },
-    { day: 6, type: 'long', ko: `긴 LT1 ${longMin}분`, en: `Long LT1 ${longMin} min`, minutes: longMin, hr: steady, note: { ko: `30분에 중간 채혈 + 종료 채혈(두 손가락)${longCap ? ` · 상한 = 30일 최장 ${longCap.longestMin}분 × 1.1` : ''}`, en: `mid sample at 30 min + end sample (two fingers)${longCap ? ` · cap = 110 % of the 30-day longest (${longCap.longestMin} min)` : ''}` } },
-    { day: 0, type: goal === 'perf' && !rec ? 'tempo' : 'lt1', ko: goal === 'perf' && !rec ? '템포 20분 (LT2−5)' : 'LT1 쉬움 또는 휴식', en: goal === 'perf' && !rec ? 'Tempo 20 min (LT2−5)' : 'LT1 easy or rest', minutes: Math.round(Math.min(90, weekendMin * 0.5) * k), hr: goal === 'perf' && !rec && T2 ? { hrLo: T2.hrLo - 7, hrHi: T2.hrLo - 1 } : easy },
-  ];
-  const total = days.reduce((s, d) => s + d.minutes, 0); const hard = days.filter(d => d.type === 'lt2' || d.type === 'tempo').reduce((s, d) => s + d.minutes * 0.55, 0);
-  return { week, recovery: rec, days, totalMin: total, hardPct: Math.round(100 * hard / total), longCap, speeds: T1 ? { lt1: [T1.speedLo, T1.speedHi], lt2: T2 ? [T2.speedLo, T2.speedHi] : null } : null };
+export const CALENDAR_KINDS = ['recovery', 'mlss', 'easy', 'blood', 'step'];
+const NON_LADDER = ['recovery', 'mlss', 'easy', 'blood'];
+const localDate = x => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
+const atNoon = s => new Date(/^\d{4}-\d{2}-\d{2}$/.test(String(s)) ? s + 'T12:00:00' : s);
+/** The Monday of the week that holds `d` (a Date, ms, or 'YYYY-MM-DD'), as 'YYYY-MM-DD' in local time. */
+export function mondayOf(d) { const x = atNoon(d); x.setHours(12, 0, 0, 0); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return localDate(x); }
+export function parseCalendar(text) {
+  const out = {};
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const line = raw.trim(); if (!line || line.startsWith('#')) continue;
+    const m = line.match(/^(\d{4}-\d{2}-\d{2})\s+([A-Za-z]+)\s*(.*)$/); if (!m) continue;
+    const kind = m[2].toLowerCase(); if (!CALENDAR_KINDS.includes(kind)) continue;
+    const mon = mondayOf(m[1]); const w = out[mon] || (out[mon] = { kinds: [], notes: [] });
+    if (!w.kinds.includes(kind)) w.kinds.push(kind); if (m[3].trim()) w.notes.push(m[3].trim());
+  }
+  return out;
 }
+/**
+ * Where the plan stands in a given week: blockWeek = weeks since the start date (1-based; the long run grows with it), ladderWeek = how many
+ * ladder weeks there have been up to and including this one (drives lt2Structure / isRecoveryWeek), kinds/notes = this week's calendar lines.
+ */
+export function planContext({ startDate = null, calendar = '', weekOffset = 0, now = Date.now() } = {}) {
+  const cal = typeof calendar === 'string' ? parseCalendar(calendar) : (calendar || {});
+  const d0 = atNoon(mondayOf(now)); d0.setDate(d0.getDate() + 7 * (weekOffset || 0)); const monday = localDate(d0);
+  const start = startDate ? mondayOf(startDate) : monday;
+  const diffWeeks = Math.round((atNoon(monday) - atNoon(start)) / (7 * 86400000));
+  let ladderWeek = 0, longWeek = 0; // longWeek: the weeks that had a long run (a step-test week has none, so the long run does not grow across it)
+  for (let i = 0; i <= diffWeeks; i++) { const d = atNoon(start); d.setDate(d.getDate() + 7 * i); const k = (cal[localDate(d)] || { kinds: [] }).kinds; if (!k.some(x => NON_LADDER.includes(x))) ladderWeek++; if (!k.includes('step')) longWeek++; }
+  const here = cal[monday] || { kinds: [], notes: [] };
+  return { monday, blockWeek: Math.max(1, diffWeeks + 1), ladderWeek: Math.max(1, ladderWeek), longWeek: Math.max(1, longWeek), kinds: here.kinds.slice(), notes: here.notes.slice(), calendar: cal };
+}
+const r5 = x => Math.round(x / 5) * 5;
+/**
+ * The week as decided on 2026-10-10 (v1.1.18): mornings run, evenings other exercise. Mon easy 50 · Tue the one hard day (the LT2 ladder at
+ * MLSS speed; an MLSS check or an easy run when the calendar says so) · Wed easy 50 · Thu the two-lap LT1 check (45 min, fasted) · Fri easy 30
+ * optional · Sat long run 70 → 100 min (+10 a week, × 0.7 in recovery weeks, ≤ 110 % of the 30-day longest) · Sun easy 50. Evenings: Mon home
+ * session, Tue strength A, Wed walk, Thu strength B, Fri foam-roll/calf/wall-sit, Sun optional incline walk.
+ * `week` = the ladder week (lt2Structure / isRecoveryWeek), `blockWeek` = weeks since the block start, `longWeek` = long-run weeks so far (the long run grows with it; default blockWeek), `kinds`/`notes` = this
+ * week's calendar entries (planContext). weekdayMin only shortens the easy days when it is below 55; weekendMin caps the long run.
+ */
+export function weeklyPlan({ zones, week = 1, blockWeek = week, longWeek = blockWeek, weekdayMin = 60, weekendMin = 150, goal = 'base', lt1Adjust = 0, longestMin = null, verifySpeed = null, kinds = [], notes = [] }) {
+  const K = kinds || []; const rec = isRecoveryWeek(week) || K.includes('recovery'); const k = rec ? 0.7 : 1; const lightWeek = rec || K.includes('easy') || K.includes('blood');
+  const T1 = sessionTargets(zones, 'lt1', { lt1Adjust }); const T2 = sessionTargets(zones, 'lt2');
+  const steady = T1 ? { hrLo: T1.hrLo, hrHi: T1.hrHi } : null; // every easy run = the LT1 session band (LT1 −10…−3 at minute 10; the ceiling LT1 + 5 after 20 min is the session's)
+  const band = T1 && Number.isFinite(T1.speedLo) ? [T1.speedLo, T1.speedHi] : null; const bandTxt = band ? ` · ${band[0].toFixed(1)}–${band[1].toFixed(1)} km/h` : '';
+  const lt1Hr = zones && Number.isFinite(zones.lt1Hr) ? zones.lt1Hr : null; const lt1Speed = zones && Number.isFinite(zones.lt1Speed) ? zones.lt1Speed : null;
+  const easyMin = Math.max(30, Math.min(50, Math.round(Math.min(weekdayMin, 60)) - 5)); // 50 unless the weekday allowance is below 55
+  const easyDay = (day, min, extraKo = '', extraEn = '') => ({ day, type: 'lt1', ko: `쉬운 런 ${min}분${extraKo}`, en: `Easy run ${min} min${extraEn}`, minutes: min, hr: steady, speed: band, note: { ko: `속도가 용량${bandTxt} · 심박은 천장(10분 시점 ${steady ? `${steady.hrLo}–${steady.hrHi}` : '–'}, 20분 뒤 ${lt1Hr != null ? lt1Hr + 5 : '–'}까지 드리프트 허용) · 넘으면 −0.3 km/h`, en: `speed is the dose${bandTxt} · heart rate is a ceiling (${steady ? `${steady.hrLo}–${steady.hrHi}` : '–'} at minute 10, drift to ${lt1Hr != null ? lt1Hr + 5 : '–'} allowed after 20 min) · over it → −0.3 km/h` } });
+  // the long run: 70 min in the first long-run week, +10 a week, up to 100 (120 for a performance goal), × 0.7 in a recovery week, ≤ 110 % of the 30-day longest
+  let longMin = Math.min(weekendMin, r5(Math.min(goal === 'perf' ? 120 : 100, 70 + 10 * (Math.max(1, longWeek) - 1)) * k)); let longCap = null;
+  if (Number.isFinite(longestMin) && longestMin > 0) { const cap = Math.max(30, r5(1.1 * longestMin)); if (cap < longMin) { longMin = cap; longCap = { longestMin, cap }; } }
+  const st = lt2Structure(week); const noteTxt = notes && notes.length ? notes.join(' · ') : '';
+  const vs = Number.isFinite(verifySpeed) ? verifySpeed : lt1Speed;
+  const rpe7 = lightWeek ? { ko: ' (RPE 7)', en: ' (RPE 7)' } : { ko: '', en: '' };
+  let tue;
+  if (K.includes('mlss')) tue = { day: 2, type: 'verify', purpose: 'mlss', ko: 'MLSS 검증 30분 (두 랩 MLSS 변형)', en: 'MLSS check 30 min (two-lap MLSS variant)', minutes: 37, hr: T2, speed: zones && Number.isFinite(zones.lt2Speed) ? zones.lt2Speed : null, note: { ko: `공복 · 쉬운 5분 → 랩 1 10분 @ LT2 속도${zones && Number.isFinite(zones.lt2Speed) ? ` ${zones.lt2Speed.toFixed(1)} km/h` : ''} → 간격 ≤ 45초 → 랩 2 20분 → 종료 채혈 · 상승 ≤ 0.5 → 다음 +0.3 · 0.5–1.0 → 그 속도가 MLSS, 유지 · > 1.0 → −0.4`, en: `fasted · 5 min easy → lap 1 10 min at the LT2 speed${zones && Number.isFinite(zones.lt2Speed) ? ` ${zones.lt2Speed.toFixed(1)} km/h` : ''} → gap ≤ 45 s → lap 2 20 min → end sample · rise ≤ 0.5 → +0.3 next time · 0.5–1.0 → that speed is the MLSS, hold · > 1.0 → −0.4` } };
+  else if (lightWeek || !st) tue = { day: 2, type: 'lt1', ko: `쉬운 런 45분${rec ? ' (회복주)' : ''}`, en: `Easy run 45 min${rec ? ' (recovery week)' : ''}`, minutes: 45, hr: steady, speed: band, note: { ko: `${noteTxt || (rec ? '사다리 4주째·8주째는 회복주 — 고강도 없음' : '이번 주는 고강도 없음')}${bandTxt}`, en: `${noteTxt || (rec ? 'ladder weeks 4 and 8 are recovery weeks — no hard session' : 'no hard session this week')}${bandTxt}` } };
+  else tue = { day: 2, type: 'lt2', ko: `LT2 사다리 ${st.label.split(' / ')[0]}`, en: `LT2 ladder ${st.label.split(' / ')[1]}`, minutes: Math.round((st.warmupSec + st.reps * st.workSec + (st.reps - 1) * st.restSec + st.cooldownSec) / 60), hr: T2, structure: st, speed: zones && Number.isFinite(zones.lt2Speed) ? zones.lt2Speed : null, note: { ko: `MLSS 속도(LT2 속도${zones && Number.isFinite(zones.lt2Speed) ? ` ${zones.lt2Speed.toFixed(1)} km/h` : ''}) · 심박 LT2 ± 3 · 구간 4분 뒤 천장을 1분 넘으면 −0.3 km/h · 2–4주마다 마지막 구간 뒤 채혈(3–4.5가 적정)`, en: `at MLSS speed (the LT2 speed${zones && Number.isFinite(zones.lt2Speed) ? ` ${zones.lt2Speed.toFixed(1)} km/h` : ''}) · HR LT2 ± 3 · over the ceiling for 1 min after minute 4 of a rep → −0.3 km/h · a sample after the last rep every 2–4 weeks (3–4.5 is on target)` } };
+  const thu = K.includes('blood')
+    ? { day: 4, type: 'rest', ko: '달리기 없음 — 혈액검사 아침', en: 'No run — blood-test morning', minutes: 0, hr: null, note: { ko: `공복 채혈 뒤 아침 식사 · 이번 주 LT1 검증은 건너뛰고 다음 주 목요일에 같은 속도로`, en: `breakfast after the fasted draw · this week's LT1 check is skipped — next Thursday at the same speed` } }
+    : { day: 4, type: 'verify', ko: `LT1 검증 달리기 (두 랩${vs != null ? `, ${vs.toFixed(1)} km/h` : ''})`, en: `LT1 verification run (two laps${vs != null ? `, ${vs.toFixed(1)} km/h` : ''})`, minutes: 45, hr: steady, speed: vs, note: { ko: `공복 · 쉬운 5분 → 랩 1 10분 → 간격 60–90초(서서, 30–45초 뒤 채혈) → 랩 2 30분 → 종료 채혈${lightWeek && !K.includes('blood') ? ' · 컨디션이 되면 실시, 아니면 다음 주' : ''}`, en: `fasted · 5 min easy → lap 1 10 min → gap 60–90 s (stand still, sample 30–45 s after the stop) → lap 2 30 min → end sample${lightWeek && !K.includes('blood') ? ' · only if readiness passes, else next week' : ''}` } };
+  const sat = K.includes('step')
+    ? { day: 6, type: 'test', ko: '계단 테스트 (젖산)', en: 'Step test (lactate)', minutes: 60, hr: null, note: { ko: `롱런 대신 · 공복 · 3분 단계 + 30초 채혈 정지, 경사 1 % · 젖산 스트립·란셋·Train.Red·H10 · 끝나면 결과 적용(역치·검증 상한)`, en: `instead of the long run · fasted · 3-min stages + 30-s sampling pauses, 1 % incline · strips, lancets, Train.Red, H10 · apply the result after (thresholds, test-speed cap)` } }
+    : { day: 6, type: 'long', ko: `롱런 ${longMin}분`, en: `Long run ${longMin} min`, minutes: longMin, hr: steady, speed: lt1Speed != null ? [Math.round((lt1Speed - 1.2) * 10) / 10, Math.round((lt1Speed - 1.2) * 10) / 10] : null, note: { ko: `공복${lt1Speed != null ? ` · 속도 ${(lt1Speed - 1.2).toFixed(1)} km/h` : ''} · 처음 60분 심박 ≤ ${steady ? steady.hrHi : '–'}, 이후 ≤ ${lt1Hr != null ? lt1Hr + 2 : '–'} — 넘으면 −0.3 km/h · 30분에 중간 채혈 + 종료 채혈(두 손가락) · 물 500–750 mL/h, 탄수 30–60 g/h${longCap ? ` · 상한 = 30일 최장 ${longCap.longestMin}분 × 1.1` : ''}${rec ? ' · 회복주 × 0.7' : ''}`, en: `fasted${lt1Speed != null ? ` · ${(lt1Speed - 1.2).toFixed(1)} km/h` : ''} · HR ≤ ${steady ? steady.hrHi : '–'} for the first 60 min, ≤ ${lt1Hr != null ? lt1Hr + 2 : '–'} after — over it → −0.3 km/h · mid sample at 30 min + end sample (two fingers) · 500–750 mL/h, 30–60 g carbohydrate/h${longCap ? ` · cap = 110 % of the 30-day longest (${longCap.longestMin} min)` : ''}${rec ? ' · recovery week × 0.7' : ''}` } };
+  const days = [
+    { ...easyDay(1, easyMin), evening: { ko: '17:30 홈 세션 25분 — 가동성 · 발 코어 · 코어 · 포고 홉 · 월 싯', en: '17:30 home session 25 min — mobility, foot core, core, pogo hops, wall-sit' } },
+    { ...tue, evening: { ko: `17:30 근력 A${rpe7.ko}`, en: `17:30 strength A${rpe7.en}` } },
+    { ...easyDay(3, easyMin), evening: { ko: '17:40 바깥 걷기 30분', en: '17:40 walk 30 min' } },
+    { ...thu, evening: { ko: `17:30 근력 B${rpe7.ko}`, en: `17:30 strength B${rpe7.en}` } },
+    { ...easyDay(5, 30, ' (선택) 또는 휴식', ' (optional) or rest'), optional: true, evening: { ko: '17:30 폼롤링 · 카프 홀드 · 월 싯 20분', en: '17:30 foam roll, calf holds, wall-sit 20 min' } },
+    { ...sat, evening: { ko: '저녁 자유', en: 'evening free' } },
+    { ...easyDay(0, Math.min(50, Math.max(30, r5(weekendMin * 0.5)))), evening: { ko: `16:30 경사 걷기 30분 (선택, 심박 ≤ ${steady ? steady.hrLo : '–'})`, en: `16:30 incline walk 30 min (optional, HR ≤ ${steady ? steady.hrLo : '–'})` } },
+  ];
+  const total = days.reduce((s, d) => s + d.minutes, 0); const hard = days.filter(d => d.type === 'lt2' || d.type === 'tempo' || d.purpose === 'mlss').reduce((s, d) => s + d.minutes * 0.55, 0);
+  return { week, blockWeek, longWeek, recovery: rec, light: lightWeek, kinds: K.slice(), notes: (notes || []).slice(), days, totalMin: total, hardPct: total ? Math.round(100 * hard / total) : 0, longCap, speeds: T1 ? { lt1: [T1.speedLo, T1.speedHi], lt2: T2 ? [T2.speedLo, T2.speedHi] : null } : null };
+}
+
+/** Why the week looks like this (the Oct 10 review, in the Plan tab). */
+export const PLAN_WHY = [
+  { ko: '원칙: 분량을 늘리는 대신 각 분을 가장 효과적인 자리에. 대부분의 날은 LT1 아래, 주 1회는 정확히 LT2에서, 주 1회는 지구력용 롱런.', en: 'Principle: put each minute where it does the most, not more minutes — most days below LT1, one session exactly at LT2, one long run for durability.' },
+  { ko: '볼륨 주 약 6시간: 쉬운 런 30–50분 ×5, 검증 45분, 롱런 70–100분. 40–60분이면 LT1 적응(미토콘드리아·지방 이용·모세혈관)에 충분하고 피로 없이 반복됨. 롱런은 매주 +10분, 최근 30일 최장 × 1.1 상한(초과 시 부상 위험 1.64배, Frandsen 2025).', en: 'Volume ≈ 6 h/week: easy runs 30–50 min ×5, the 45-min check, a long run of 70–100 min. 40–60 min is enough for the LT1 adaptations (mitochondria, fat use, capillaries) and repeats without fatigue. The long run grows +10 min a week under a cap of 110 % of the 30-day longest (hazard 1.64× above it, Frandsen 2025).' },
+  { ko: '강도 분포: 약 85 % LT1 아래, 주 1회 LT2/MLSS, 그 위는 없음(지구력 선수 84–95 % 첫 역치 아래, 고강도 주 2회 정도 — Stöggl & Sperlich 2015). 고강도를 MLSS 속도에 두는 이유: 정상상태를 유지하는 최고 강도(Wackerhage 2022)라 자극은 최대, 회복 비용은 최소. 사다리는 속도가 아니라 구간 길이로 그 속도에서의 시간을 쌓음.', en: 'Intensity: ≈ 85 % below LT1, one LT2/MLSS session a week, nothing above (endurance athletes: 84–95 % below the first threshold, about two hard sessions a week — Stöggl & Sperlich 2015). The hard session sits at MLSS speed because it is the highest intensity that still holds a steady state (Wackerhage 2022): full stimulus, least recovery cost. The ladder lengthens the reps, not the speed.' },
+  { ko: '용량 = 속도, 심박 = 천장: 트레드밀에서 속도는 정확하고 심박은 달리는 중 올라가며(10/9–10: 젖산 1.0 그대로, +6~9 bpm) 날마다 움직임. 그래서 범위는 속도로, 심박은 상한(LT1, 20분 뒤 LT1 + 5)으로만. 범위가 아직 LT1 아래임을 증명하는 것이 매주 목요일 두 랩 검증.', en: 'Dose = speed, heart rate = ceiling: on a treadmill speed is exact, heart rate drifts within a run (Oct 9–10: +6 to +9 bpm with lactate flat at 1.0) and moves day to day. So the band is a speed, heart rate only caps it (LT1, LT1 + 5 after 20 min), and Thursday’s two-lap check proves the band is still below LT1.' },
+  { ko: '요일: 화 고강도는 월 쉬운 날 뒤라 신선하고 목까지 48시간(고강도 뒤 부교감 회복, Stanley 2013) · 목 검증은 고강도 48시간 뒤, 롱런 이틀 전, 매주 같은 시각·공복이라 값이 비교됨 · 토 롱런은 시간이 있는 날, 일 쉬운 런은 능동 회복 · 월·수 쉬운 런과 수 걷기는 고강도 사이의 완충.', en: 'Days: Tuesday hard comes after an easy Monday and leaves 48 h before Thursday (parasympathetic recovery after hard work, Stanley 2013) · the Thursday check is 48 h after the hard day, two days before the long run, same time and fasted every week so the values compare · Saturday has the time, Sunday is active recovery · Monday/Wednesday easy and the Wednesday walk buffer the hard days.' },
+  { ko: '근력을 화·목 저녁에: 힘든 날은 힘들게, 쉬운 날은 쉽게 — 두 세션은 48시간 간격, 아침 달리기와 10시간 이상 떨어져 간섭이 적음. A(힌지·런지·벤치·로우·카프·사이드 플랭크)와 B(스쿼트·RDL·당기기·프레스·앉은 카프·노르딕·코펜하겐)로 패턴을 주 2회, 부상 예방 근육(종아리·햄스트링·내전근) 포함. 월·금 홈 세션은 가벼운 날의 저부하 부상 예방.', en: 'Strength on Tuesday and Thursday evenings keeps hard days hard and easy days easy — 48 h apart, ≥ 10 h after the morning run. A (hinge, lunge, bench, row, calf, side plank) and B (squat, RDL, pull, press, seated calf, Nordic, Copenhagen) cover every pattern twice a week with the injury-prevention muscles (calf, hamstring, adductor). Monday/Friday home sessions are low-load prevention on the light days.' },
+  { ko: '아침 05:30 공복, 저녁 17:30: LT1 강도의 공복 달리기는 문제없고, 고정된 시각·상태가 젖산 검증을 깨끗하게 하며, 롱런 중 탄수(30–60 g/h)가 후반 드리프트가 연료 문제가 되는 것을 막음.', en: 'Mornings fasted at 05:30, the rest at 17:30: fasted running is fine at LT1 intensity, a fixed time and state keeps the lactate checks clean, and carbohydrate during the long run (30–60 g/h) stops late drift from being a fuel problem.' },
+];
 
 /** Per-session metrics used by insights and summaries. */
 export function sessionMetrics(session) {
