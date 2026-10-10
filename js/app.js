@@ -11,7 +11,7 @@ import { importFile } from './importers.js';
 import { liveChart, timelineChart, stepTestChart, trendChart } from './charts.js';
 
 // ---------- defaults ----------
-export const APP_VERSION = '1.1.23'; // keep in sync with sw.js VERSION
+export const APP_VERSION = '1.1.24'; // keep in sync with sw.js VERSION
 const DEFAULTS = {
   profile: { birth: '1997-07-21', restHr: 52, restLactate: 0.8, restLactateAt: '2026-10-09', maxHr: 188, maxHrMode: 'tanaka', lang: 'both', theme: 'system' }, // restLactateAt: when the baseline was measured (a monthly reminder to re-measure)
   treadmill: { model: 'LTSXL', minSpeed: 0.8, maxSpeed: 18, speedStep: 0.1, maxIncline: 15, inclineStep: 0.5 },
