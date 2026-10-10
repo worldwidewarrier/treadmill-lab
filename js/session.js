@@ -111,9 +111,11 @@ export class SessionEngine {
     if (this.state === 'running') return;
     const now = this.now(); this.startedAt = now; this.lastStep = now; this.lastAutosave = now; this.state = 'running'; this.sessionId = uid();
     this.filter.reset(); this.events.push({ t: now, type: 'start', mode: this.mode });
-    if (this.mode === 'test') { if (this.protocol.warmupSec > 0) this.setPhase('warmup', now); else this.beginStage(0, now); }
-    else if (this.mode === 'lt2') { this.rep = 0; this.setPhase(this.intervals.warmupSec > 0 ? 'warmup' : 'work', now); if (this.phase === 'work') { this.rep = 1; this.alerts?.cue(VOICE.interval_work(1, this.intervals.reps), { beep: 'double' }); } }
-    else if (this.mode === 'verify') { this.rep = 0; if (this.laps.warmupSec > 0) this.setPhase('warmup', now); else this.advanceLap(now, true); }
+    const W = this.meta?.warmup || null; // warm-up intensities (v1.1.25), from the app's zones
+    if (this.mode === 'test') { if (this.protocol.warmupSec > 0) { this.setPhase('warmup', now); this.alerts?.speak(VOICE.test_warmup(Math.round(this.protocol.warmupSec / 60), this.protocol.warmupSpeed)); } else this.beginStage(0, now); }
+    else if (this.mode === 'lt2') { this.rep = 0; this.setPhase(this.intervals.warmupSec > 0 ? 'warmup' : 'work', now); if (this.phase === 'work') { this.rep = 1; this.alerts?.cue(VOICE.interval_work(1, this.intervals.reps), { beep: 'double' }); } else this.alerts?.speak(VOICE.lt2_warmup(Math.round(this.intervals.warmupSec / 60), W)); }
+    else if (this.mode === 'verify') { this.rep = 0; if (this.laps.warmupSec > 0) { this.setPhase('warmup', now); this.alerts?.speak(VOICE.verify_warmup(W, this.meta?.purpose === 'mlss')); } else this.advanceLap(now, true); }
+    else if (this.mode === 'lt1') { this.setPhase('work', now); this.alerts?.speak(VOICE.lt1_warmup(W)); }
     else this.setPhase('work', now);
     this.alerts?.keepAwake(true);
     this.timer = setInterval(() => this.tick(), 250);
@@ -213,11 +215,12 @@ export class SessionEngine {
       const I = this.intervals;
       const dur = this.phase === 'warmup' ? I.warmupSec : this.phase === 'work' ? I.workSec : this.phase === 'rest' ? I.restSec : this.phase === 'cooldown' ? I.cooldownSec : Infinity;
       const left = dur - el;
+      if (this.phase === 'warmup' && this.meta?.warmup && I.warmupSec >= 540) { const W = this.meta.warmup; if (el >= I.warmupSec - 360 && !this.warned.r1) { this.warned.r1 = 1; A?.speak(VOICE.lt2_ramp(W.sub)); } if (el >= I.warmupSec - 180 && !this.warned.r2) { this.warned.r2 = 1; A?.speak(VOICE.lt2_ramp(W.ramp)); } } // the ramp: 4 min at hi → sub → ramp (v1.1.25)
       if (left <= 10 && !this.warned.x10 && Number.isFinite(dur)) { this.warned.x10 = 1; A?.speak(VOICE.pause_warn(10)); }
       if (left <= 0 && Number.isFinite(dur)) this.advanceInterval(now, false);
     } else if (this.mode === 'verify') {
       const Lp = this.laps;
-      if (this.phase === 'warmup') { const left = Lp.warmupSec - el; if (left <= 10 && !this.warned.w10) { this.warned.w10 = 1; A?.speak(VOICE.lap_warn_start(10)); } if (left <= 0) this.advanceLap(now, false); }
+      if (this.phase === 'warmup') { const left = Lp.warmupSec - el; const W = this.meta?.warmup; if (W) { const mlss = this.meta?.purpose === 'mlss'; if (!mlss && el >= 30 && !this.warned.wr) { this.warned.wr = 1; A?.speak(VOICE.lt2_ramp(`${W.lo}에서 ${W.hi}`)); } if (mlss && el >= 120 && !this.warned.wr) { this.warned.wr = 1; A?.speak(VOICE.lt2_ramp(W.sub)); } } if (left <= 10 && !this.warned.w10) { this.warned.w10 = 1; A?.speak(VOICE.lap_warn_start(10)); } if (left <= 0) this.advanceLap(now, false); }
       else if (this.phase === 'work') {
         const dur = this.rep === 1 ? Lp.lap1Sec : Lp.lap2Sec; const left = dur - el;
         if (this.rep === 2 && Math.abs(left - dur / 2) < 1 && !this.warned.half) { this.warned.half = 1; A?.speak(VOICE.halfway()); }
@@ -230,10 +233,12 @@ export class SessionEngine {
         if (this.phase === 'gap' && el >= Lp.gapCapSec && !this.warned.gcap) { this.warned.gcap = 1; A?.cue(VOICE.gap_cap(), { beep: 'low' }); }
       }
     } else if (this.mode === 'lt1' && this.targets?.durationSec) {
-      const left = this.targets.durationSec - el;
+      const left = this.targets.durationSec - el; const W = this.meta?.warmup;
+      if (el >= 300 && !this.warned.main) { this.warned.main = 1; A?.speak(VOICE.lt1_main(W)); }
+      if (el >= (this.targets.judgeFromSec ?? JUDGE_FROM_SEC) && !this.warned.judge) { this.warned.judge = 1; A?.speak(VOICE.lt1_judge()); }
       if (Math.abs(left - this.targets.durationSec / 2) < 1 && !this.warned.half) { this.warned.half = 1; A?.speak(VOICE.halfway()); }
       if (left <= 60 && !this.warned.m1) { this.warned.m1 = 1; A?.speak(VOICE.minute_left()); }
-      if (left <= 0 && !this.warned.end) { this.warned.end = 1; A?.cue('목표 시간 완료. 쿨다운하세요.', { beep: 'triple' }); }
+      if (left <= 0 && !this.warned.end) { this.warned.end = 1; A?.cue(VOICE.lt1_end(W), { beep: 'triple' }); }
     }
   }
   /** The two-lap verification run: warm-up → lap 1 → gap → lap 2 → done (the recording goes on until Finish for the end sample). */
@@ -248,7 +253,7 @@ export class SessionEngine {
   advanceInterval(now, manual) {
     const I = this.intervals;
     if (this.phase === 'warmup') { this.rep = 1; this.setPhase('work', now); this.alerts?.cue(VOICE.interval_work(1, I.reps), { beep: 'double', vib: [300, 100, 300] }); }
-    else if (this.phase === 'work') { if (this.rep >= I.reps) { this.setPhase('cooldown', now); this.alerts?.cue('마지막 인터벌 끝. 쿨다운.', { beep: 'triple' }); } else { this.setPhase('rest', now); this.alerts?.cue(VOICE.interval_rest(), { beep: 'single' }); } }
+    else if (this.phase === 'work') { if (this.rep >= I.reps) { this.setPhase('cooldown', now); this.alerts?.cue(VOICE.lt2_cooldown(this.meta?.warmup), { beep: 'triple' }); } else { this.setPhase('rest', now); this.alerts?.cue(VOICE.interval_rest(this.meta?.warmup), { beep: 'single' }); } }
     else if (this.phase === 'rest') { this.rep += 1; this.setPhase('work', now); this.alerts?.cue(VOICE.interval_work(this.rep, I.reps), { beep: 'double', vib: [300, 100, 300] }); }
     else if (this.phase === 'cooldown') { if (!manual) { this.alerts?.cue('쿨다운 완료.', { beep: 'high' }); this.setPhase('done', now); } }
   }

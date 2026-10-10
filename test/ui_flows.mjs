@@ -17,13 +17,17 @@ await page.evaluate(() => localStorage.clear());
 await page.reload({ waitUntil: 'networkidle' }); await page.waitForSelector('#view .card');
 // --- LT1 session via demo ×60 ---
 await page.click('#nav button[data-view=live]'); await page.waitForSelector('#mode-seg');
-await page.click('#mode-seg button[data-mode=lt1]'); await page.waitForSelector('#lt1-min'); await page.fill('#lt1-min', '4'); await page.$eval('#lt1-min', el => el.dispatchEvent(new Event('change')));
+await page.click('#mode-seg button[data-mode=lt1]'); await page.waitForSelector('#lt1-min'); await page.fill('#lt1-min', '12'); await page.$eval('#lt1-min', el => el.dispatchEvent(new Event('change')));
 await page.click('#src-seg button[data-src=demo]'); await page.selectOption('#demo-speed', '60');
 await page.click('[data-action=connect]'); await page.waitForSelector('[data-action=start]:not([disabled])');
 await page.click('[data-action=start]'); await page.waitForSelector('#lv-zone');
-await page.waitForTimeout(6000); // ≈6 min of data
+await page.waitForTimeout(6000); // ≈6 min of data: past the 0–5-min easy jog, before the band is judged (10:00)
+const preCls = await page.getAttribute('#lv-zone', 'class'); const preTxt = await page.textContent('#lv-zone-text');
+check('LT1 banner before 10:00 says the band is not judged yet (v1.1.25)', /rest/.test(preCls) && /판정은 10:00부터/.test(preTxt), preCls + ' ' + preTxt);
+await page.waitForFunction(() => (TL.engine?.view?.().elapsedSec || 0) >= 615, null, { timeout: 20000 }); // ≈10.25 min: judging has begun
+await page.waitForTimeout(600);
 const zoneCls = await page.getAttribute('#lv-zone', 'class'); const zoneTxt = await page.textContent('#lv-zone-text');
-check('LT1 zone banner shows a state', /in|above|below/.test(zoneCls), zoneCls + ' ' + zoneTxt);
+check('LT1 zone banner shows a state from 10:00', /in|above|below|drift/.test(zoneCls), zoneCls + ' ' + zoneTxt);
 check('live view (not a step test) says when to type the lactate value', /멈춘 직후/.test(await page.evaluate(() => document.getElementById('lv-lac-hint')?.textContent || '')));
 await shot('20-lt1-live');
 await page.click('[data-action=stop]'); await page.click('.modal [data-x=yes]'); await page.waitForSelector('#tl-chart .uplot', { timeout: 10000 });

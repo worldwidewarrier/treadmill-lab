@@ -158,10 +158,12 @@ setRestBaseline(0.8); setTestLowest(null);
   const zones = computeZones({ lt1Hr: 143, lt2Hr: 157, lt1Speed: 8.7, lt2Speed: 10.5, maxHr: 188 }); const T = sessionTargets(zones, 'lt1', { minutes: 50 });
   check('LT1 targets carry the ceiling 148 (LT1 + 5) from minute 20', T.hrLo === 133 && T.hrHi === 140 && T.ceilHr === 148 && T.lateFromSec === 1200, JSON.stringify(T));
   check('LT1 targets say the band is judged from minute 10 (judgeFromSec 600)', T.judgeFromSec === 600);
-  spoken.length = 0; const src = new ClockSource(now); const eng = new SessionEngine({ settings, alerts }); eng.setSource(src); eng.configure({ mode: 'lt1', targets: T, meta: { speed: 8.3, incline: 1 } }); eng.start(); clearInterval(eng.timer);
-  src.run(300, 118); src.run(240, 150);
+  spoken.length = 0; const src = new ClockSource(now); const eng = new SessionEngine({ settings, alerts }); eng.setSource(src); eng.configure({ mode: 'lt1', targets: T, meta: { speed: 8.3, incline: 1, warmup: { lo: '7.0', hi: '7.5', sub: '8.5', ramp: '9.5', recLo: '6.5', recHi: '7.0', walk: '5.5', bandLo: '7.7', bandHi: '8.4' } } }); eng.start(); clearInterval(eng.timer);
+  check('LT1 start: the warm-up intensity is spoken (v1.1.25)', spoken.some(t => /워밍업 5분. 시속 7.0에서 7.5/.test(t)), spoken.join(' | '));
+  src.run(300, 118); check('5:00: the main speed and "judged from minute 10"', spoken.some(t => /본 속도로. 시속 7.7에서 8.4. 판정은 10분부터/.test(t)), spoken.join(' | '));
+  src.run(240, 150);
   check('0–9 min: a low warm-up heart rate and even 4 min at 150 give no zone cue (judged from minute 10)', !spoken.some(t => /심박/.test(t)), spoken.join(' | '));
-  src.run(60, 138);
+  src.run(60, 138); check('10:00: "판정 시작"', spoken.some(t => /판정 시작/.test(t)));
   src.run(300, 145);
   check('minute 10–15 at 145 (above the band 133–140): the zone-high cue, zone "above"', spoken.some(t => /심박 높음/.test(t)) && eng.zoneState === 'above', spoken.join(' | '));
   spoken.length = 0; src.run(LATE_FROM_SEC - 900 + 5, 138); src.run(300, 145);
@@ -184,6 +186,28 @@ setRestBaseline(0.8); setTestLowest(null);
   check('the long run is capped at 110 % of 62 = 68 → 70 min (rounded to 5), and the note says so', satC.minutes === 70 && pc.longCap && pc.longCap.cap === 70 && /110 % of the 30-day longest \(62 min\)/.test(satC.note.en), `${satC.minutes} ${satC.note.en}`);
   check('a cap above the planned long run leaves it alone (block week 4 → 100 min, longest 95 → cap 105)', (() => { const q = weeklyPlan({ zones, week: 1, blockWeek: 4, longestMin: 95 }); return q.days.find(d => d.day === 6).minutes === 100 && q.longCap === null; })());
   check('a longest run above the plan leaves the plan alone', weeklyPlan({ zones, week: 2, longestMin: 120 }).longCap === null);
+}
+// ───────────── 6a. Warm-up intensities spoken in the LT2 and two-lap modes (v1.1.25) ─────────────
+{
+  const W = { lo: '7.0', hi: '7.5', sub: '8.5', ramp: '9.5', recLo: '6.5', recHi: '7.0', walk: '5.5', bandLo: '7.7', bandHi: '8.4' };
+  spoken.length = 0; let src = new ClockSource(now); let eng = new SessionEngine({ settings, alerts }); eng.setSource(src);
+  eng.configure({ mode: 'lt2', intervals: { warmupSec: 600, reps: 2, workSec: 120, restSec: 60, cooldownSec: 60 }, targets: null, meta: { speed: 10.5, incline: 1, warmup: W } }); eng.start(); clearInterval(eng.timer);
+  check('LT2 start: warm-up 10 min at 7.5, 8.5 at 4 min, 9.5 at 7 min', spoken.some(t => /워밍업 10분. 시속 7.5. 4분에 8.5, 7분에 9.5/.test(t)), spoken.join(' | '));
+  src.run(245, 130); check('4:00: "시속 8.5로"', spoken.some(t => /시속 8.5로/.test(t)));
+  src.run(180, 135); check('7:00: "시속 9.5로"', spoken.some(t => /시속 9.5로/.test(t)));
+  src.run(180, 150); src.run(125, 160); check('after rep 1: the recovery jog speed is spoken', spoken.some(t => /회복. 시속 6.5에서 7.0/.test(t)), spoken.join(' | '));
+  src.run(65, 140); src.run(125, 160); check('after the last rep: the cool-down speeds', spoken.some(t => /쿨다운 6분. 3분 시속 7.0, 3분 걷기 5.5/.test(t)), spoken.join(' | '));
+  eng.stop('user');
+  spoken.length = 0; src = new ClockSource(now); eng = new SessionEngine({ settings, alerts }); eng.setSource(src);
+  eng.configure({ mode: 'verify', laps: { warmupSec: 300, lap1Sec: 600, lap2Sec: 1800, gapCapSec: 180, sampleAtSec: 30 }, targets: null, meta: { speed: 8.7, incline: 1, purpose: 'lt1', warmup: W } }); eng.start(); clearInterval(eng.timer);
+  check('two-lap start: 30 s walk at 5.5 then 7.0–7.5', spoken.some(t => /워밍업 5분. 30초 걷기 5.5, 그 다음 시속 7.0에서 7.5/.test(t)), spoken.join(' | '));
+  src.run(35, 110); check('0:30: "시속 7.0에서 7.5로"', spoken.some(t => /시속 7.0에서 7.5로/.test(t)));
+  eng.stop('user');
+  spoken.length = 0; src = new ClockSource(now); eng = new SessionEngine({ settings, alerts }); eng.setSource(src);
+  eng.configure({ mode: 'verify', laps: { warmupSec: 300, lap1Sec: 600, lap2Sec: 1200, gapCapSec: 180, sampleAtSec: 30 }, targets: null, meta: { speed: 10.5, incline: 1, purpose: 'mlss', warmup: W } }); eng.start(); clearInterval(eng.timer);
+  check('MLSS variant start: 2 min at 7.5, 3 min at 8.5', spoken.some(t => /워밍업 5분. 2분 시속 7.5, 3분 8.5/.test(t)), spoken.join(' | '));
+  src.run(125, 120); check('2:00: "시속 8.5로"', spoken.some(t => /시속 8.5로/.test(t)));
+  eng.stop('user');
 }
 // ───────────── 6b. Step test: the heart-rate stop criterion (v1.1.23, replaces RPE) ─────────────
 {
