@@ -452,7 +452,7 @@ function buildTimeline(session) {
     else if (how === 'manual' && own && own.stopT <= end + tol && own.stopT >= end - R.runOnMs) role = 'end'; // the end typed a little after the stop this value belongs to
     else if (own && own !== final) role = 'mid';                                     // its own stop was followed by more running
     else { const rel = (e.t - t0) / 1000; role = (rel >= dur - 300 || rel >= dur * 0.85) ? 'end' : 'mid'; } // no stop of its own: by the clock (last 5 min / 15 % of the run)
-    samples.push({ t: e.t, value: e.value, role });
+    samples.push({ t: e.t, value: e.value, role, stopT: own && Number.isFinite(own.stopT) ? own.stopT : null });
   }
   const lagMs = how === 'hr' || (final && !final.exact) ? R.lagMs : 0; // how late the end may be: nothing for a time that was pressed, typed or logged
   return { t0, tRec, start, end, how, sure, why, bouts, stops, samples, lagMs, tailSec: Math.max(0, (tRec - end) / 1000), entryT: final && final.events.length ? final.events[0].t : null };

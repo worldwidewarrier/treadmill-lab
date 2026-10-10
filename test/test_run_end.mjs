@@ -1,7 +1,7 @@
 // Where the running stopped (analysis.js runTimeline) and everything the verification card derives from it.
 // Sessions are simulated: heart rate with realistic on/off kinetics, noise and slow wander; the moment the belt stopped is known.
 import { runTimeline, pauseIntervals, runWindowStart, runWindowEnd, stoppedMs, smo2Steady, RUN_END } from '../js/analysis.js';
-import { lactateChecks, lactateVerdict, endWindowStats, endOnlyProxy, verdictZoneChange, multiDayCurve, sessionMetrics, claudeSummary } from '../js/prescribe.js';
+import { lactateChecks, midLabel, lactateVerdict, endWindowStats, endOnlyProxy, verdictZoneChange, multiDayCurve, sessionMetrics, claudeSummary } from '../js/prescribe.js';
 
 let failures = 0; const check = (n, c, d = '') => { console.log((c ? 'PASS ' : 'FAIL ') + n + (d ? '  ' + d : '')); if (!c) failures++; };
 const T0 = Date.UTC(2026, 9, 7, 6, 0, 0);
@@ -82,6 +82,23 @@ const truthHr = (s, a, b) => mean(s.hrLive.filter(p => p[0] >= T0 + a * 1000 && 
   check('14-min jog before the sample: uncertain (why "level"), no heart rate in the zone change, no proxy call', t2.how === 'sample' && !t2.sure && t2.why === 'level' && lactateVerdict(s2).unsure === true && (() => { const z = verdictZoneChange({ ...ZONES, lt2Hr: 120 }, s2); return !z || z.zones.lt2Hr === 120; })(), `end ${mmss(rel(s2, t2.end))} ${t2.why}`);
 }
 
+// ───────────── 2b. Long run (10/10): mid sample at 30 min, the field says 30 min, not 10 ─────────────
+{
+  const END = 5490; const level = sec => 128 + 8 * Math.min(1, sec / 600) + 8 * Math.max(0, sec - 1900) / 3600;
+  const hr = simHr({ segs: [{ until: 1800, hr: level }, { until: 1890, hr: 100, fast: 0.4 }, { until: END, hr: level }, { until: END + 120, hr: 96, fast: 0.5 }], seed: 31 });
+  const s = mk({ hr, lactate: [[60, 0.6], [1840, 0.8], [END + 60, 1.9]] }); const c = lactateChecks(s);
+  check('long run: the 30-min value is the mid sample and its field says 30 min', c.rest === 0.6 && c.mid === 0.8 && c.end === 1.9 && c.midMin === 30 && midLabel(c).en === 'mid (30 min)', JSON.stringify(c));
+  // its verdict is about durability: no LT1 call, no zone change (the app used to say "borderline LT1, target HR −2 bpm")
+  const s78 = { ...s, speed: 7.8 }; const vd = lactateVerdict(s78);
+  check('long run: verdict says long run, changes no zone', vd.longRun === true && vd.level === 'near' && vd.adjust === null && /Long run, 9\d min/.test(vd.en) && verdictZoneChange({ lt1Hr: 143, lt1Speed: 8.7 }, s78, vd) === null, vd.en);
+  // in the multi-day curve the 30-min value stands for 7.8 km/h, not the end value; short checks keep their end value
+  const shortRun = (speed, end, lvl, seed) => { const E = 2100; const h = simHr({ segs: [{ until: E, hr: sec => lvl + 6 * Math.min(1, sec / 600) }, { until: E + 120, hr: 100, fast: 0.5 }], seed }); return { ...mk({ hr: h, lactate: [[E + 40, end]] }), speed }; };
+  const md = multiDayCurve([s78, shortRun(8.5, 1.0, 138, 41), shortRun(9.0, 2.8, 146, 42)]); const p78 = md.points.find(p => p.x === 7.8);
+  check('multi-day curve: a long run is a point by its 30-min value (0.8) with the heart rate before it, not its end value (1.9)', p78 && p78.la === 0.8 && p78.from === 'mid' && p78.atMin === 30 && p78.hr > 130 && p78.hr < 140 && md.points.length === 3, JSON.stringify(p78));
+  const noMid = { ...mk({ hr, lactate: [[END + 60, 1.9]] }), speed: 7.6 };
+  check('…a long run with only an end value is left out of the curve', !multiDayCurve([noMid]).points.length);
+}
+
 // ───────────── 3. MLSS check with a 10-min sample: a stop inside the run ─────────────
 {
   const level = sec => 150 + 6 * Math.min(1, sec / 600) + 8 * Math.max(0, sec - 675) / 1200; const END = 1875; // 30 min of running + the 75-s stop
@@ -91,6 +108,7 @@ const truthHr = (s, a, b) => mean(s.hrLive.filter(p => p[0] >= T0 + a * 1000 && 
   const s = mk({ hr, purpose: 'mlss', lactate: [[650, 3.4], [END + 70, 4.1]], a1 }); const tl = runTimeline(s);
   check('MLSS with 10-min sample: end at the last stop, one stop inside the run', tl.how === 'sample' && tl.sure && Math.abs(rel(s, tl.end) - END) <= 20 && tl.stops.length === 1 && Math.abs(rel(s, tl.stops[0][0]) - 600) <= 20 && rel(s, tl.stops[0][1]) >= 675 && rel(s, tl.stops[0][1]) <= 675 + 150, `end ${mmss(rel(s, tl.end))}, stop ${tl.stops.map(x => mmss(rel(s, x[0])) + '–' + mmss(rel(s, x[1]))).join()}`);
   const c = lactateChecks(s); check('  10-min value is the mid sample, the last one the end sample', c.mid === 3.4 && c.end === 4.1 && c.rest === null, JSON.stringify(c));
+  check('  the mid sample carries the minute it was taken (card label "중간(10분)", not a fixed 10)', c.midMin === 10 && midLabel(c).ko === '중간(10분)' && midLabel({ mid: 0.8 }).ko === '중간', JSON.stringify(c));
   const vd = lactateVerdict(s); check('  verdict by the rise 3.4 → 4.1', vd.kind === 'mlss' && vd.level === 'ok' && /0\.7/.test(vd.en), vd.en);
   const px = endOnlyProxy(s); const stood = (tl.stops[0][2] - tl.stops[0][0]) / 60000;
   check('  running time leaves out the standing (75 s), not the minute the heart rate took to come back', Math.abs(px.durMin - ((tl.end - T0) / 60000 - stood)) < 1e-9 && px.durMin > 29.7 && px.durMin < 30.4 && stood > 1 && stood < 1.6 && tl.stops[0][2] < tl.stops[0][1] && Math.abs(stoppedMs(tl, T0, tl.end) / 60000 - stood) < 1e-9, `${px.durMin.toFixed(2)} min of running, stood ${(stood * 60).toFixed(0)} s, heart rate back after ${((tl.stops[0][1] - tl.stops[0][0]) / 1000).toFixed(0)} s`);
@@ -289,14 +307,14 @@ const truthHr = (s, a, b) => mean(s.hrLive.filter(p => p[0] >= T0 + a * 1000 && 
 {
   const END = 1800; const hr = simHr({ segs: [{ until: 600, hr: 152 }, { until: 680, hr: 112, fast: 0.4 }, { until: END, hr: 156 }, { until: END + 100, hr: 104, fast: 0.5 }], seed: 61 });
   const s = mk({ hr, purpose: 'mlss', lactate: [[30, 1.0], [650, 3.4], [END + 60, 4.1]] });
-  check('as recorded', JSON.stringify(lactateChecks(s)) === '{"rest":1,"mid":3.4,"end":4.1}');
-  s.lactateChecks = { end: 4.6 }; check('one field typed: only that one is fixed', JSON.stringify(lactateChecks(s)) === '{"rest":1,"mid":3.4,"end":4.6}');
-  s.lactateChecks = { mid: null }; check('a field emptied stays empty (it used to refill from the recording)', JSON.stringify(lactateChecks(s)) === '{"rest":1,"mid":null,"end":4.1}');
+  check('as recorded', JSON.stringify(lactateChecks(s)) === '{"rest":1,"mid":3.4,"end":4.1,"midMin":10}');
+  s.lactateChecks = { end: 4.6 }; check('one field typed: only that one is fixed', JSON.stringify(lactateChecks(s)) === '{"rest":1,"mid":3.4,"end":4.6,"midMin":10}');
+  s.lactateChecks = { mid: null }; check('a field emptied stays empty (it used to refill from the recording)', JSON.stringify(lactateChecks(s)) === '{"rest":1,"mid":null,"end":4.1,"midMin":null}');
   s.lactateChecks = { rest: null, mid: null, end: null }; check('all three emptied: no verdict', lactateChecks(s).end === null && lactateVerdict(s) === null);
   s.lactateChecks = { end: 'abc' }; check('rubbish in a field counts as empty', lactateChecks(s).end === null);
   delete s.lactateChecks;
   const twoRest = mk({ hr, purpose: 'mlss', lactate: [[20, 1.0], [140, 1.2], [END + 60, 4.1]] });
-  check('a second baseline value (second finger before the run) is not the 10-min sample', JSON.stringify(lactateChecks(twoRest)) === '{"rest":1,"mid":null,"end":4.1}');
+  check('a second baseline value (second finger before the run) is not the 10-min sample', JSON.stringify(lactateChecks(twoRest)) === '{"rest":1,"mid":null,"end":4.1,"midMin":null}');
 }
 
 // ───────────── 10. LT2 mode: warm-up, rep(s), cool-down ─────────────

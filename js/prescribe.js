@@ -5,6 +5,8 @@ const r1 = v => Math.round(v * 10) / 10;
 const mean = a => a.length ? a.reduce((s, v) => s + v, 0) / a.length : NaN;
 /** Resting lactate measured on its own (Settings): used by the LT1 verdict when a session has no rest value of its own. */
 let REST_BASELINE = null;
+/** Running time (min) above which a constant run is a long run: judged for durability, not for LT1 (see verdictCore, multiDayCurve). */
+export const LONG_RUN_MIN = 45;
 export function setRestBaseline(v) { REST_BASELINE = Number.isFinite(v) && v >= 0.3 && v <= 4 ? v : null; }
 /** Do the samples [[t, …], …] span at least `ms`? */
 const covers = (pts, ms) => { let a = Infinity, b = -Infinity; for (const p of pts) { if (p[0] < a) a = p[0]; if (p[0] > b) b = p[0]; } return b - a >= ms; };
@@ -164,7 +166,7 @@ export function claudeSummary({ profile, zones, session, metrics, analysis, plan
       // Where the running ended and how that was found: everything "last 5 min" below is measured from there (see runTimeline).
       const endTxt = `run ended at ${mmss((ew.endT - session.startedAt) / 1000)} (found by: ${RUN_END_HOW[ew.how] || ew.how}${ew.tailSec >= 20 ? `; the recording went on for ${mmss(ew.tailSec)}` : ''})${ew.sure ? '' : ' — UNCERTAIN: the last-5-min figures are estimates'}`;
       const durTxt = ew.bouts === 1 ? `running time ${px.durMin.toFixed(1)} min` : ew.bouts === 0 ? 'ended in the warm-up' : `interval session — last rep ${px.durMin.toFixed(1)} min`;
-      L.push(`Constant load (${session.purpose || 'auto'}): speed ${session.speed ?? '?'} km/h, incline ${session.incline ?? '?'} %; ${durTxt}; ${endTxt}; HR drift min 8-13 → last 5 ${Number.isFinite(px.driftBpm) ? (px.driftBpm >= 0 ? '+' : '') + px.driftBpm.toFixed(1) + ' bpm' : 'n/a'}; RPE end ${px.rpeEnd ?? 'n/a'}; last-5-min HR ${Number.isFinite(ew.hr) ? Math.round(ew.hr) : 'n/a'}, α1 ${Number.isFinite(ew.alpha1) ? ew.alpha1.toFixed(2) : 'n/a'}; lactate rest ${c.rest ?? 'n/a'}, 10-min ${c.mid ?? 'n/a'}, end ${c.end ?? 'n/a'}${v ? `; verdict: ${v.en}` : ''}`);
+      L.push(`Constant load (${session.purpose || 'auto'}): speed ${session.speed ?? '?'} km/h, incline ${session.incline ?? '?'} %; ${durTxt}; ${endTxt}; HR drift min 8-13 → last 5 ${Number.isFinite(px.driftBpm) ? (px.driftBpm >= 0 ? '+' : '') + px.driftBpm.toFixed(1) + ' bpm' : 'n/a'}; RPE end ${px.rpeEnd ?? 'n/a'}; last-5-min HR ${Number.isFinite(ew.hr) ? Math.round(ew.hr) : 'n/a'}, α1 ${Number.isFinite(ew.alpha1) ? ew.alpha1.toFixed(2) : 'n/a'}; lactate rest ${c.rest ?? 'n/a'}, ${midLabel(c).en} ${c.mid ?? 'n/a'}, end ${c.end ?? 'n/a'}${v ? `; verdict: ${v.en}` : ''}`);
       const ss = smo2Steady(session);
       if (ss) L.push(`SmO2 (constant load): 5-10 min ${Number.isFinite(ss.earlyMean) ? ss.earlyMean.toFixed(1) : 'n/a'} %, last 5 min ${Number.isFinite(ss.endMean) ? ss.endMean.toFixed(1) : 'n/a'} % (drift ${Number.isFinite(ss.drift) ? (ss.drift > 0 ? '+' : '') + ss.drift.toFixed(1) : 'n/a'})${ew.sure ? '' : ' [end of the run UNCERTAIN: window estimated]'}, min ${Number.isFinite(ss.min) ? ss.min.toFixed(1) : 'n/a'} %, end slope ${Number.isFinite(ss.slopeEnd) ? ss.slopeEnd.toFixed(2) : 'n/a'} %/min → ${ss.steady == null ? 'n/a' : ss.steady ? 'steady' : 'NOT steady'}; THb mean ${Number.isFinite(ss.thbMean) ? ss.thbMean.toFixed(1) : 'n/a'} (contact ${ss.contact ?? 'n/a'}); coverage ${Math.round(ss.coverageSec / 60)} min; offset ${Math.round((session.smo2.offsetMs || 0) / 1000)} s${session.smo2.alignment ? ` (${session.smo2.alignment.method === 'manual' ? 'manual' : session.smo2.alignment.ok ? `HR-verified, ${session.smo2.alignment.mad.toFixed(2)} bpm` : `UNVERIFIED, HR mismatch ${session.smo2.alignment.mad.toFixed(1)} bpm`})` : ' (clock only)'}`);
     }
@@ -196,9 +198,15 @@ export function lactateChecks(session) {
     const hl = list(session.hrLive); const t0 = session.startedAt, t1 = session.endedAt || (hl.length ? hl[hl.length - 1][0] : t0); const dur = (t1 - t0) / 1000;
     samples = list(session.events).filter(e => e.type === 'lactate' && Number.isFinite(e.value)).map(e => { const rel = (e.t - t0) / 1000; return { value: e.value, role: rel <= 240 ? 'rest' : (rel >= dur - 300 || rel >= dur * 0.85) ? 'end' : 'mid' }; });
   }
-  for (const s of samples) if (out[s.role] == null) out[s.role] = s.value; // the first of each kind (a second finger does not replace it)
-  return { ...out, ...typedChecks(session) };
+  let midT = null;
+  for (const s of samples) if (out[s.role] == null) { out[s.role] = s.value; if (s.role === 'mid' && Number.isFinite(s.t)) midT = Number.isFinite(s.stopT) ? s.stopT : s.t; } // the minute the running stopped for it, else when it was typed // the first of each kind (a second finger does not replace it)
+  const typed = typedChecks(session);
+  // when the mid sample was taken, in whole minutes of the recording (null when typed by hand): the card and texts say "mid (30 min)", not a fixed "10 min"
+  const midMin = 'mid' in typed || midT == null ? null : Math.round((midT - session.startedAt) / 60000);
+  return { ...out, ...typed, midMin };
 }
+/** Label of the mid sample: "중간 (30분)" / "mid (30 min)", or plain "중간" / "mid" when its time is not known. */
+export function midLabel(c) { const m = c && Number.isFinite(c.midMin) ? c.midMin : null; return m == null ? { ko: '중간', en: 'mid' } : { ko: `중간(${m}분)`, en: `mid (${m} min)` }; }
 /**
  * The card fields that were typed by hand ({ rest?, mid?, end? }, null = emptied). Up to v1.1.11 an edit in the card stored all three
  * fields, the two untouched ones as the clock had filed them; in such a record (no lactateChecksV) a field that equals that filing was
@@ -290,8 +298,8 @@ function verdictCore(session, c, isMlss) {
   if (bouts > 1) return intervalVerdict(c, spTxt, delta);
   if (isMlss) {
     if (delta != null) {
-      if (delta <= 1.0 && c.end < 8) return { level: 'ok', adjust: { lt2Speed: +0.3 }, ko: `MLSS 이하 확인${spTxt}: 10분→종료 상승 ${delta.toFixed(1)} mmol/L (≤1.0). 다음 검증은 +0.3 km/h.`, en: `At/below MLSS${spTxt}: 10-min→end rise ${delta.toFixed(1)} mmol/L (≤1.0). Next verification +0.3 km/h.` };
-      return { level: 'high', adjust: { lt2Speed: -0.4 }, ko: `MLSS 초과${spTxt}: 10분→종료 상승 ${delta.toFixed(1)} mmol/L (>1.0). LT2 속도를 0.3~0.5 km/h 낮추세요.`, en: `Above MLSS${spTxt}: rise ${delta.toFixed(1)} mmol/L (>1.0). Lower the LT2 speed by 0.3–0.5 km/h.` };
+      if (delta <= 1.0 && c.end < 8) return { level: 'ok', adjust: { lt2Speed: +0.3 }, ko: `MLSS 이하 확인${spTxt}: ${midLabel(c).ko}→종료 상승 ${delta.toFixed(1)} mmol/L (≤1.0). 다음 검증은 +0.3 km/h.`, en: `At/below MLSS${spTxt}: ${midLabel(c).en}→end rise ${delta.toFixed(1)} mmol/L (≤1.0). Next verification +0.3 km/h.` };
+      return { level: 'high', adjust: { lt2Speed: -0.4 }, ko: `MLSS 초과${spTxt}: ${midLabel(c).ko}→종료 상승 ${delta.toFixed(1)} mmol/L (>1.0). LT2 속도를 0.3~0.5 km/h 낮추세요.`, en: `Above MLSS${spTxt}: rise ${delta.toFixed(1)} mmol/L (>1.0). Lower the LT2 speed by 0.3–0.5 km/h.` };
     }
     if (c.end >= 6) return { level: 'high', adjust: { lt2Speed: -0.4 }, ko: `종료 젖산 ${c.end} — LT2 위일 가능성${spTxt}. 10분 샘플을 추가하면 판정이 확실해집니다.`, en: `End lactate ${c.end} — likely above LT2${spTxt}. Add a 10-min sample next time for a firm call.` };
     if (c.end < 3) return { level: 'low', adjust: { lt2Speed: +0.3 }, ko: `종료 젖산 ${c.end} — LT2 아래${spTxt}. 다음엔 +0.3 km/h.`, en: `End lactate ${c.end} — below LT2${spTxt}. Try +0.3 km/h next time.` };
@@ -305,6 +313,18 @@ function verdictCore(session, c, isMlss) {
     if (bad.length) return { level: 'high', adjust: { lt2Speed: -0.3 }, ko: `종료 젖산 ${c.end} + ${bad.map(b => b.split('|')[0]).join(', ')} — MLSS 초과 가능성(대리 지표)${spTxt}. 다음은 −0.3 km/h.`, en: `End lactate ${c.end} + ${bad.map(b => b.split('|')[1]).join(', ')} — likely above MLSS (proxy)${spTxt}. Next −0.3 km/h.` };
     if (Number.isFinite(px.driftBpm) && px.driftBpm <= 6) return { level: 'ok', adjust: { lt2Speed: +0.3 }, ko: `종료 젖산 ${c.end}, 심박 드리프트 ${dTxt} (8–13분 → 마지막 5분)${px.smo2Steady ? ', SmO₂ 안정' : ''} — MLSS 이하 가능성 높음(대리 지표)${spTxt}. 다음은 +0.3 km/h. 확정하려면 10분 샘플 또는 같은 속도 10분 단독 런.`, en: `End lactate ${c.end}, HR drift ${dTxt} (min 8–13 → last 5)${px.smo2Steady ? ', SmO2 steady' : ''} — likely at/below MLSS (proxy)${spTxt}. Next +0.3 km/h; to confirm, add a 10-min sample or a separate 10-min run at this speed.` };
     return { level: 'near', adjust: null, ko: `종료 젖산 ${c.end}, 심박 드리프트 ${dTxt} — MLSS 경계${spTxt}. 같은 속도로 재검하거나 10분 샘플을 추가하세요.`, en: `End lactate ${c.end}, HR drift ${dTxt} — borderline MLSS${spTxt}. Repeat at this speed or add a 10-min sample.` };
+  }
+  // Long runs (more than LONG_RUN_MIN of running): the LT1 rule (end ≤ rest + 1.0) is made for a 30–35-min check. Over 90 min
+  // lactate can creep up from duration alone (heat, fluids, glycogen) at a speed well below LT1, so a long run says how the
+  // athlete held up, not where LT1 lies: no zone change from it, and its end value is kept out of the multi-day curve.
+  const px1 = endOnlyProxy(session);
+  if (px1.sure && px1.durMin > LONG_RUN_MIN) {
+    const mins = Math.round(px1.durMin); const mTxt = c.mid != null ? `${midLabel(c).ko} ${c.mid} → ` : '', mEn = c.mid != null ? `${midLabel(c).en} ${c.mid} → ` : '';
+    const dRise = delta != null ? delta : rise; const dK = delta != null ? '중간 대비' : '안정 대비', dE = delta != null ? 'from the mid sample' : 'over rest';
+    const base = { adjust: null, longRun: true };
+    if (c.end <= 2.0 && (rise == null || rise <= 1.0)) return { ...base, level: 'ok', ko: `롱런 ${mins}분: ${mTxt}종료 ${c.end}${riseKo} — 끝까지 LT1 아래, 지구력 양호${spTxt}.`, en: `Long run, ${mins} min: ${mEn}end ${c.end}${riseEn} — below LT1 throughout, good durability${spTxt}.` };
+    if (c.end <= 2.5 && (dRise == null || dRise <= 1.5)) return { ...base, level: 'near', ko: `롱런 ${mins}분: ${mTxt}종료 ${c.end} (${dK} +${(dRise ?? 0).toFixed(1)}) — 긴 시간에 따른 상승${spTxt}. LT1 판정·존 변경에는 쓰지 않습니다. 다음 롱런은 같은 속도에 수분·보급을 챙기거나 −0.3 km/h.`, en: `Long run, ${mins} min: ${mEn}end ${c.end} (+${(dRise ?? 0).toFixed(1)} ${dE}) — a rise from duration${spTxt}. Not used for LT1 or the zones. Next long run: same speed with fluids and fuel, or −0.3 km/h.` };
+    return { ...base, level: 'high', ko: `롱런 ${mins}분: ${mTxt}종료 ${c.end}${riseKo} — 이 시간에는 강도가 높았습니다${spTxt}. 다음 롱런은 −0.3~−0.5 km/h. (LT1 판정·존 변경에는 쓰지 않음)`, en: `Long run, ${mins} min: ${mEn}end ${c.end}${riseEn} — too hard for this duration${spTxt}. Next long run −0.3 to −0.5 km/h. (Not used for LT1 or the zones.)` };
   }
   // LT1 / easy runs
   const tooHigh = c.end > 2.5 || (rise != null && rise > 1.5);
@@ -320,7 +340,7 @@ function verdictCore(session, c, isMlss) {
  * would move the zone to a wrong place; the speed part does not depend on it. Interval sessions change nothing.
  */
 export function verdictZoneChange(zones, session, vd = lactateVerdict(session)) {
-  if (!vd || vd.intervals) return null; const z = zones || {}; const ew = endWindowStats(session, 300); const sp = session.speed;
+  if (!vd || vd.intervals || vd.longRun) return null; const z = zones || {}; const ew = endWindowStats(session, 300); const sp = session.speed;
   const hr = ew.sure && Number.isFinite(ew.hr) ? Math.round(ew.hr) : NaN; const out = { ...z }; const r1 = v => Math.round(v * 10) / 10;
   const up = (k, v) => { if (Number.isFinite(v) && !(z[k] >= v)) out[k] = v; }; const down = (k, v) => { if (Number.isFinite(v) && !(z[k] <= v)) out[k] = v; };
   if (vd.kind === 'mlss') {
@@ -351,6 +371,16 @@ export function multiDayCurve(sessions, { days = 60, incline = null } = {}) {
     const c = lactateChecks(s); if (c.end == null) continue;
     const w = endWindowStats(s, 300);
     if (w.bouts !== 1) continue; // intervals: lactate after reps with recoveries is not a point of the constant-speed curve
+    const px = endOnlyProxy(s);
+    if (px.sure && px.durMin > LONG_RUN_MIN) {
+      // a long run: its end value carries the duration (drift, fluids, glycogen), not the speed. A sample taken 20–45 min in, while the
+      // run was still going, is comparable with a 30–35-min check — that one is the point, with the heart rate of the 5 min of running before it.
+      if (!(c.mid != null && Number.isFinite(c.midMin) && c.midMin >= 20 && c.midMin <= 45)) continue;
+      const tl = runTimeline(s); const smp = tl.samples.find(x => x.role === 'mid'); const stopT = smp && Number.isFinite(smp.stopT) ? smp.stopT : smp?.t;
+      const hrs = list(s.hrLive).filter(p => p[1] > 0 && p[0] >= stopT - 300000 && p[0] <= stopT && !inStop(tl, p[0])).map(p => p[1]);
+      pts.push({ x: s.speed, la: c.mid, hr: hrs.length ? mean(hrs) : NaN, alpha1: NaN, unsure: false, from: 'mid', atMin: c.midMin, id: s.id, date: s.startedAt, incline: s.incline });
+      continue;
+    }
     pts.push({ x: s.speed, la: c.end, hr: w.sure ? w.hr : NaN, alpha1: w.sure ? w.alpha1 : NaN, unsure: !w.sure, id: s.id, date: s.startedAt, incline: s.incline });
   }
   // one point per speed: keep the most recent

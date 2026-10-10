@@ -49,7 +49,8 @@ check('  zone button: floor raised to the running heart rate, not to the recover
 await page.screenshot({ path: `${SHOTS}/40-card-lt1.png`, fullPage: true });
 // 2) MLSS with 10-min sample
 await open('card-mlss'); c = await card();
-check('MLSS check: 10-min and end value in their fields, verdict by the rise', c.mid === '3.4' && c.end === '4.1' && c.notices.some(n => /10분→종료 상승 0\.7/.test(n)) && Math.abs(secs(c.runend) - 1875) <= 20, `${c.mid}/${c.end} ${c.runend}`);
+check('mid field named by the minute the sample was taken', /중간\(10분\) \/ mid \(10 min\)/.test(await page.$eval('#vc-mid', el => el.closest('label').textContent)));
+check('MLSS check: 10-min and end value in their fields, verdict by the rise', c.mid === '3.4' && c.end === '4.1' && c.notices.some(n => /중간\(10분\)→종료 상승 0\.7/.test(n)) && Math.abs(secs(c.runend) - 1875) <= 20, `${c.mid}/${c.end} ${c.runend}`);
 // 3) value typed afterwards, recording with a tail: uncertain until confirmed
 await open('card-later'); c = await card();
 check('value typed afterwards + tail: the card says the end is uncertain and offers to confirm it', c.confirm && c.notices.some(n => /달리기 종료 시점 불확실/.test(n)) && /추정/.test(c.how) && /추정 구간/.test(c.last5) && Math.abs(secs(c.runend) - 1800) <= 25, `${c.runend} ${c.how.slice(0, 20)}`);
