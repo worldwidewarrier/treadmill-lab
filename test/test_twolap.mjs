@@ -185,6 +185,16 @@ setRestBaseline(0.8); setTestLowest(null);
   check('a cap above the planned long run leaves it alone (block week 4 → 100 min, longest 95 → cap 105)', (() => { const q = weeklyPlan({ zones, week: 1, blockWeek: 4, longestMin: 95 }); return q.days.find(d => d.day === 6).minutes === 100 && q.longCap === null; })());
   check('a longest run above the plan leaves the plan alone', weeklyPlan({ zones, week: 2, longestMin: 120 }).longCap === null);
 }
+// ───────────── 6b. Step test: the heart-rate stop criterion (v1.1.23, replaces RPE) ─────────────
+{
+  spoken.length = 0; const src = new ClockSource(now); const eng = new SessionEngine({ settings, alerts }); eng.setSource(src);
+  eng.configure({ mode: 'test', protocol: { ...settings.protocol, warmupSec: 0, stageSec: 180, pauseSec: 30 }, meta: { stopHr: 179 } }); eng.start(); clearInterval(eng.timer);
+  src.run(60, 150); check('stage 1 at 150 bpm: no stop cue', !spoken.some(t => /종료 기준/.test(t)));
+  src.run(20, 180); check('20 s at 180 (≥ 179): not yet', !spoken.some(t => /종료 기준/.test(t)));
+  src.run(15, 180); check('30 s at or above the stop heart rate → the stop-criterion cue, once', spoken.filter(t => /종료 기준/.test(t)).length === 1 && eng.stopAdvised === true, spoken.join(' | '));
+  src.run(60, 182); check('…and not again', spoken.filter(t => /종료 기준/.test(t)).length === 1);
+  eng.stop('user');
+}
 // ───────────── 7. α1 artifact gate 3 %; monthly resting-lactate reminder ─────────────
 {
   const rows = [3, 5, 7, 9, 11, 13].map((v, i) => ({ idx: i + 1, speed: 6 + i, hr: 110 + 10 * i, alpha1: 1.2 - 0.12 * i, artifactPct: i === 2 ? 3.5 : 1 }));

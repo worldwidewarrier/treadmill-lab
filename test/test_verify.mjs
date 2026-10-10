@@ -52,7 +52,7 @@ check('continuous test: stages contiguous', sess.stages.slice(1).every((st, i) =
   check('proxy: 30 min, drift +11, end 4.5 → high', lactateVerdict(mk(30, 11, 4.5)).level === 'high');
   check('proxy: 30 min, drift +8.5 (≈7 measured), end 4.0 → near', lactateVerdict(mk(30, 8.5, 4.0)).level === 'near');
   check('proxy: 20 min, end 4.0 → near (withheld)', lactateVerdict(mk(20, 2, 4.0)).level === 'near');
-  check('proxy: RPE 19 → high even with flat HR', lactateVerdict(mk(30, 2, 4.0, { rpe: 19 })).level === 'high');
+  check('proxy ignores an old RPE event (v1.1.23): flat HR stays ok', lactateVerdict(mk(30, 2, 4.0, { rpe: 19 })).level !== 'high');
   check('end < 3 with purpose mlss → low', lactateVerdict({ ...mk(30, 2, 2.4), purpose: 'mlss' }).level === 'low');
   check('purpose lt1 forces LT1 rules even when end ≥ 3', lactateVerdict({ ...mk(30, 2, 3.2), purpose: 'lt1' }).level === 'high');
   check('end ≥ 6 still high', lactateVerdict(mk(30, 2, 6.5)).level === 'high');

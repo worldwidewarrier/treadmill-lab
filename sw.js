@@ -1,5 +1,5 @@
 // Treadmill Lab service worker — precache the app shell for offline use; network-first for navigations.
-const VERSION = 'tl-v1.1.22';
+const VERSION = 'tl-v1.1.23';
 const ASSETS = ['./', './index.html', './manifest.webmanifest', './css/app.css', './vendor/uPlot.min.css', './vendor/uPlot.iife.min.js',
   './js/app.js', './js/alerts.js', './js/analysis.js', './js/ble.js', './js/charts.js', './js/dfa.js', './js/fit.js', './js/i18n.js', './js/importers.js', './js/lactate.js', './js/prescribe.js', './js/session.js', './js/sources.js', './js/store.js',
   './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png'];

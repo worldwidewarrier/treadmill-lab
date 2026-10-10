@@ -8,7 +8,7 @@ export const DEFAULT_PROTOCOL = {
   incline: 1.0, startSpeed: 6.0, speedStep: 1.0,
   fixedSpeed: 7.0, startIncline: 1.0, inclineStep: 2.0,
   stageSec: 180, pauseSec: 30, warmupSec: 300, warmupSpeed: 5.5,
-  stopLactate: 6.0, stopRpe: 17, maxStages: 12,
+  stopLactate: 6.0, stopHrPct: 95, maxStages: 12, // (v1.1.23: the RPE stop criterion is gone — heart rate ≥ stopHrPct % of max replaces it)
 };
 const wall = () => (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now()); // real time, also for demo / replay sources that run on a fast data clock
 const QUIET_MS = 5000; // the strap notifies once a second; nothing for 5 s = it is not sending (out of range, reconnecting)
@@ -188,7 +188,6 @@ export class SessionEngine {
     if (value >= this.protocol.stopLactate && !this.stopAdvised && this.mode === 'test') { this.stopAdvised = true; this.alerts?.cue(VOICE.stop_criteria(), { beep: 'triple' }); }
     this.onUpdate(this.view());
   }
-  enterRpe(value, stageIdx = null) { const st = (stageIdx != null ? this.stages.find(s => s.idx === stageIdx) : null) || this.stages[this.stageIdx] || this.stages[this.stages.length - 1]; if (st) st.rpe = value; this.events.push({ t: this.now(), type: 'rpe', stage: st ? st.idx : null, rep: this.rep, phase: this.phase, value }); if (value >= this.protocol.stopRpe && !this.stopAdvised && this.mode === 'test') { this.stopAdvised = true; this.alerts?.cue(VOICE.stop_criteria(), { beep: 'triple' }); } this.onUpdate(this.view()); }
   stop(reason = 'user') {
     if (this.state !== 'running') return this.session;
     const now = this.now(); clearInterval(this.timer);
@@ -206,7 +205,9 @@ export class SessionEngine {
     const el = (now - this.phaseStart) / 1000; const P = this.protocol, A = this.alerts;
     if (this.mode === 'test') {
       if (this.phase === 'warmup') { const left = P.warmupSec - el; if (left <= 10 && !this.warned.w10) { this.warned.w10 = 1; A?.speak(VOICE.pause_warn(10)); } if (left <= 0) { A?.speak(VOICE.warmup_end()); this.beginStage(0, now); } }
-      else if (this.phase === 'work') { const left = P.stageSec - el; if (left <= 10 && !this.warned.s10) { this.warned.s10 = 1; A?.cue(VOICE.stage_warn(10), { beep: 'single' }); } if (left <= 0) this.endStageWork(now); }
+      else if (this.phase === 'work') { const left = P.stageSec - el; if (left <= 10 && !this.warned.s10) { this.warned.s10 = 1; A?.cue(VOICE.stage_warn(10), { beep: 'single' }); }
+        const stopHr = this.meta?.stopHr; if (Number.isFinite(stopHr) && this.lastHr >= stopHr) { if (!this.hiHrSince) this.hiHrSince = now; if ((now - this.hiHrSince) / 1000 >= 30 && !this.stopAdvised) { this.stopAdvised = true; A?.cue(VOICE.stop_criteria(), { beep: 'triple' }); } } else this.hiHrSince = 0; // v1.1.23: HR ≥ stopHr for 30 s = the stop criterion (replaces RPE)
+        if (left <= 0) this.endStageWork(now); }
       else if (this.phase === 'pause') { const left = P.pauseSec - el; if (left <= 10 && !this.warned.p10) { this.warned.p10 = 1; A?.speak(VOICE.pause_warn(10)); } if (left <= 0) { const st = this.stages[this.stageIdx]; st.tPauseEnd = now; if (this.stopAdvised) { this.setPhase('done', now); } else this.beginStage(this.stageIdx + 1, now); } }
     } else if (this.mode === 'lt2') {
       const I = this.intervals;
