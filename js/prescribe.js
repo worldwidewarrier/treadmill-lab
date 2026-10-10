@@ -201,8 +201,11 @@ export function lactateChecks(session) {
   let midT = null;
   for (const s of samples) if (out[s.role] == null) { out[s.role] = s.value; if (s.role === 'mid' && Number.isFinite(s.t)) midT = Number.isFinite(s.stopT) ? s.stopT : s.t; } // the minute the running stopped for it, else when it was typed // the first of each kind (a second finger does not replace it)
   const typed = typedChecks(session);
-  // when the mid sample was taken, in whole minutes of the recording (null when typed by hand): the card and texts say "mid (30 min)", not a fixed "10 min"
-  const midMin = 'mid' in typed || midT == null ? null : Math.round((midT - session.startedAt) / 60000);
+  // when the mid sample was taken, in whole minutes of the recording: the card and texts say "mid (30 min)", not a fixed "10 min".
+  // A value retyped in the card keeps the time of the sample it corrects; a minute typed in the card (midMinTyped) wins; an emptied field has none.
+  let midMin = midT == null ? null : Math.round((midT - session.startedAt) / 60000);
+  if (Number.isFinite(session.midMinTyped)) midMin = session.midMinTyped;
+  if (('mid' in typed && typed.mid == null) || (typed.mid == null && out.mid == null)) midMin = null;
   return { ...out, ...typed, midMin };
 }
 /** Label of the mid sample: "중간 (30분)" / "mid (30 min)", or plain "중간" / "mid" when its time is not known. */
@@ -364,23 +367,28 @@ export function verdictZoneChange(zones, session, vd = lactateVerdict(session)) 
  */
 export function multiDayCurve(sessions, { days = 60, incline = null } = {}) {
   const now = Date.now(); const pts = [];
+  // skipped: recent real sessions that carry lactate but are not a point, with the reason — shown under the curve, so nothing drops out unseen
+  const skipped = []; const skip = (s, why, c = {}) => skipped.push({ id: s.id, date: s.startedAt, x: s.speed, why, mid: c.mid ?? null, midMin: c.midMin ?? null });
   for (const s of sessions) {
-    if (s.type === 'test' || !s.final || !Number.isFinite(s.speed) || s.sourceKind === 'demo') continue; // demo (virtual strap) sessions are practice, not data
+    if (!s || s.type === 'test' || s.sourceKind === 'demo') continue; // demo (virtual strap) sessions are practice, not data
     if (now - s.startedAt > days * 86400000) continue;
     if (incline != null && Number.isFinite(s.incline) && Math.abs(s.incline - incline) > 0.6) continue;
-    const c = lactateChecks(s); if (c.end == null) continue;
+    const c = lactateChecks(s); if (c.end == null && c.mid == null) continue; // no lactate at all: not a verification run
+    if (!s.final) { skip(s, 'unfinished', c); continue; }
+    if (!Number.isFinite(s.speed)) { skip(s, 'no-speed', c); continue; }
     const w = endWindowStats(s, 300);
-    if (w.bouts !== 1) continue; // intervals: lactate after reps with recoveries is not a point of the constant-speed curve
+    if (w.bouts !== 1) { skip(s, 'intervals', c); continue; } // intervals: lactate after reps with recoveries is not a point of the constant-speed curve
     const px = endOnlyProxy(s);
     if (px.sure && px.durMin > LONG_RUN_MIN) {
       // a long run: its end value carries the duration (drift, fluids, glycogen), not the speed. A sample taken 20–45 min in, while the
       // run was still going, is comparable with a 30–35-min check — that one is the point, with the heart rate of the 5 min of running before it.
-      if (!(c.mid != null && Number.isFinite(c.midMin) && c.midMin >= 20 && c.midMin <= 45)) continue;
-      const tl = runTimeline(s); const smp = tl.samples.find(x => x.role === 'mid'); const stopT = smp && Number.isFinite(smp.stopT) ? smp.stopT : smp?.t;
+      if (!(c.mid != null && Number.isFinite(c.midMin) && c.midMin >= 20 && c.midMin <= 45)) { skip(s, 'long-no-mid', c); continue; }
+      const tl = runTimeline(s); const smp = tl.samples.find(x => x.role === 'mid'); const stopT = (smp && !Number.isFinite(s.midMinTyped)) ? (Number.isFinite(smp.stopT) ? smp.stopT : smp.t) : s.startedAt + c.midMin * 60000; // a typed minute (or no logged sample): that minute
       const hrs = list(s.hrLive).filter(p => p[1] > 0 && p[0] >= stopT - 300000 && p[0] <= stopT && !inStop(tl, p[0])).map(p => p[1]);
       pts.push({ x: s.speed, la: c.mid, hr: hrs.length ? mean(hrs) : NaN, alpha1: NaN, unsure: false, from: 'mid', atMin: c.midMin, id: s.id, date: s.startedAt, incline: s.incline });
       continue;
     }
+    if (c.end == null) { skip(s, 'no-end', c); continue; }
     pts.push({ x: s.speed, la: c.end, hr: w.sure ? w.hr : NaN, alpha1: w.sure ? w.alpha1 : NaN, unsure: !w.sure, id: s.id, date: s.startedAt, incline: s.incline });
   }
   // one point per speed: keep the most recent
@@ -393,5 +401,5 @@ export function multiDayCurve(sessions, { days = 60, incline = null } = {}) {
   const analysis = points.length >= 3 ? analyzeLactate(points.map(p => ({ x: p.x, la: p.la, hr: hrOf(p) }))) : null;
   const span = points.length ? Math.max(...points.map(p => p.la)) - Math.min(...points.map(p => p.la)) : 0;
   const grade = points.length >= 5 && span >= 2 ? 'B' : points.length >= 3 ? 'C' : '-';
-  return { points, analysis, grade };
+  return { points, analysis, grade, skipped };
 }

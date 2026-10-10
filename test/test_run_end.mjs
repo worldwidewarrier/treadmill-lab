@@ -97,6 +97,17 @@ const truthHr = (s, a, b) => mean(s.hrLive.filter(p => p[0] >= T0 + a * 1000 && 
   check('multi-day curve: a long run is a point by its 30-min value (0.8) with the heart rate before it, not its end value (1.9)', p78 && p78.la === 0.8 && p78.from === 'mid' && p78.atMin === 30 && p78.hr > 130 && p78.hr < 140 && md.points.length === 3, JSON.stringify(p78));
   const noMid = { ...mk({ hr, lactate: [[END + 60, 1.9]] }), speed: 7.6 };
   check('…a long run with only an end value is left out of the curve', !multiDayCurve([noMid]).points.length);
+  // the mid value typed in the card (10/10: entered in the 「10분」 field): a retyped value keeps the time of the sample it corrects;
+  // a value typed with no sample of its own is left out and listed — until its minute is typed in the card
+  const retyped = { ...s78, lactateChecks: { mid: 0.9 }, lactateChecksV: 2 }; const cr = lactateChecks(retyped);
+  check('mid value retyped in the card keeps the minute of the logged sample', cr.mid === 0.9 && cr.midMin === 30 && multiDayCurve([retyped]).points[0]?.la === 0.9, JSON.stringify(cr));
+  const typedOnly = { ...mk({ hr, lactate: [[60, 0.6], [END + 60, 1.9]] }), speed: 7.8, lactateChecks: { mid: 0.8 }, lactateChecksV: 2 };
+  const mdT = multiDayCurve([typedOnly]);
+  check('mid typed with no time: left out of the curve and listed as skipped', !mdT.points.length && mdT.skipped.length === 1 && mdT.skipped[0].x === 7.8 && mdT.skipped[0].why === 'long-no-mid', JSON.stringify(mdT.skipped));
+  { const un = multiDayCurve([{ ...s78, final: false }]), ns = multiDayCurve([{ ...s78, speed: null }]);
+    check('every left-out run says why (unfinished, no speed)', un.skipped[0]?.why === 'unfinished' && ns.skipped[0]?.why === 'no-speed' && !un.points.length && !ns.points.length, JSON.stringify([un.skipped, ns.skipped])); }
+  const typedMin = { ...typedOnly, midMinTyped: 30 }; const mdM = multiDayCurve([typedMin]);
+  check('…with its minute typed (30) it becomes the 7.8 km/h point', mdM.points.length === 1 && mdM.points[0].la === 0.8 && mdM.points[0].atMin === 30 && mdM.points[0].hr > 130 && mdM.points[0].hr < 140 && !mdM.skipped.length && lactateChecks(typedMin).midMin === 30, JSON.stringify(mdM.points[0]));
 }
 
 // ───────────── 3. MLSS check with a 10-min sample: a stop inside the run ─────────────
