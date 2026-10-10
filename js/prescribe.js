@@ -113,7 +113,7 @@ export function parseCalendar(text) {
 export function planContext({ startDate = null, calendar = '', weekOffset = 0, now = Date.now() } = {}) {
   const cal = typeof calendar === 'string' ? parseCalendar(calendar) : (calendar || {});
   const d0 = atNoon(mondayOf(now)); d0.setDate(d0.getDate() + 7 * (weekOffset || 0)); const monday = localDate(d0);
-  const start = startDate ? mondayOf(startDate) : monday;
+  const start = startDate && !isNaN(atNoon(startDate)) ? mondayOf(startDate) : monday; // (an unreadable start date = this week)
   const diffWeeks = Math.round((atNoon(monday) - atNoon(start)) / (7 * 86400000));
   let ladderWeek = 0, longWeek = 0; // longWeek: the weeks that had a long run (a step-test week has none, so the long run does not grow across it)
   for (let i = 0; i <= diffWeeks; i++) { const d = atNoon(start); d.setDate(d.getDate() + 7 * i); const k = (cal[localDate(d)] || { kinds: [] }).kinds; if (!k.some(x => NON_LADDER.includes(x))) ladderWeek++; if (!k.includes('step')) longWeek++; }
@@ -136,7 +136,7 @@ export function weeklyPlan({ zones, week = 1, blockWeek = week, longWeek = block
   const band = T1 && Number.isFinite(T1.speedLo) ? [T1.speedLo, T1.speedHi] : null; const bandTxt = band ? ` · ${band[0].toFixed(1)}–${band[1].toFixed(1)} km/h` : '';
   const lt1Hr = zones && Number.isFinite(zones.lt1Hr) ? zones.lt1Hr : null; const lt1Speed = zones && Number.isFinite(zones.lt1Speed) ? zones.lt1Speed : null;
   const easyMin = Math.max(30, Math.min(50, Math.round(Math.min(weekdayMin, 60)) - 5)); // 50 unless the weekday allowance is below 55
-  const easyDay = (day, min, extraKo = '', extraEn = '') => ({ day, type: 'lt1', ko: `쉬운 런 ${min}분${extraKo}`, en: `Easy run ${min} min${extraEn}`, minutes: min, hr: steady, speed: band, note: { ko: `속도가 용량${bandTxt} · 심박은 천장(10분 시점 ${steady ? `${steady.hrLo}–${steady.hrHi}` : '–'}, 20분 뒤 ${lt1Hr != null ? lt1Hr + 5 : '–'}까지 드리프트 허용) · 넘으면 −0.3 km/h`, en: `speed is the dose${bandTxt} · heart rate is a ceiling (${steady ? `${steady.hrLo}–${steady.hrHi}` : '–'} at minute 10, drift to ${lt1Hr != null ? lt1Hr + 5 : '–'} allowed after 20 min) · over it → −0.3 km/h` } });
+  const easyDay = (day, min, extraKo = '', extraEn = '') => ({ day, type: 'lt1', ko: `쉬운 런 ${min}분${extraKo}`, en: `Easy run ${min} min${extraEn}`, minutes: min, hr: steady, speed: band, note: { ko: `속도가 용량 · 심박은 천장(10분 시점 ${steady ? `${steady.hrLo}–${steady.hrHi}` : '–'}, 20분 뒤 ${lt1Hr != null ? lt1Hr + 5 : '–'}까지 드리프트 허용) · 넘으면 −0.3 km/h`, en: `speed is the dose · heart rate is a ceiling (${steady ? `${steady.hrLo}–${steady.hrHi}` : '–'} at minute 10, drift to ${lt1Hr != null ? lt1Hr + 5 : '–'} allowed after 20 min) · over it → −0.3 km/h` } });
   // the long run: 70 min in the first long-run week, +10 a week, up to 100 (120 for a performance goal), × 0.7 in a recovery week, ≤ 110 % of the 30-day longest
   let longMin = Math.min(weekendMin, r5(Math.min(goal === 'perf' ? 120 : 100, 70 + 10 * (Math.max(1, longWeek) - 1)) * k)); let longCap = null;
   if (Number.isFinite(longestMin) && longestMin > 0) { const cap = Math.max(30, r5(1.1 * longestMin)); if (cap < longMin) { longMin = cap; longCap = { longestMin, cap }; } }
