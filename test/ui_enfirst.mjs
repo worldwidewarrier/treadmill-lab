@@ -84,5 +84,16 @@ const head2 = await page.$eval('details.desc[data-key="home-today"] h3', h => h.
 check('…and Home is Korean first again', /^[^A-Za-z]*[가-힣]/.test(head2), head2);
 await page.click('#nav button[data-view=settings]'); await page.waitForSelector('[data-set="profile.restLactate"]');
 check('…and the Settings labels are Korean first again', await page.evaluate(() => [...document.querySelectorAll('label.field')].some(l => [...l.childNodes].some(n => n.nodeType === 3 && n.data.trim() === '안정 시 젖산 mmol/L / Resting lactate'))));
+// v1.1.30: an install that has run before, still on the default "한국어 + English", opens English first once; a fresh install keeps the default
+await page.evaluate(async () => { TL.settings.profile.lang = 'both'; TL.settings.migr.lang1130 = null; await TL.saveSettings(); });
+await page.reload({ waitUntil: 'networkidle' }); await page.waitForSelector('#view .card'); await page.waitForTimeout(400);
+const mig = await page.evaluate(() => ({ lang: TL.settings.profile.lang, done: !!TL.settings.migr.lang1130, nav: [...document.querySelectorAll('#nav button')].map(b => [...b.querySelectorAll('span')].filter(s => s.checkVisibility()).map(s => s.textContent).join('')).join(',') }));
+check('an existing install on "한국어 + English" opens in "English + 한국어" (once), the tab bar in English', mig.lang === 'enfirst' && mig.done && mig.nav === '⌂Home,▶Session,⌁Analysis,▦Plan,⚙Settings', JSON.stringify(mig));
+await page.evaluate(async () => { TL.settings.profile.lang = 'both'; await TL.saveSettings(); }); await page.reload({ waitUntil: 'networkidle' }); await page.waitForSelector('#view .card');
+check('…switched back by hand, it stays "한국어 + English" after a reload', await page.evaluate(() => TL.settings.profile.lang) === 'both');
+await page.evaluate(async () => { TL.settings.profile.lang = 'ko'; TL.settings.migr.lang1130 = null; await TL.saveSettings(); }); await page.reload({ waitUntil: 'networkidle' }); await page.waitForSelector('#view .card');
+check('a language chosen on purpose (한국어) is kept', await page.evaluate(() => TL.settings.profile.lang) === 'ko');
+const ctx2 = await browser.newContext({ viewport: { width: 384, height: 790 }, locale: 'ko-KR', timezoneId: 'Asia/Seoul' }); const p2 = await ctx2.newPage(); await p2.goto(base, { waitUntil: 'networkidle' }); await p2.waitForSelector('#view .card');
+check('a fresh install keeps the default "한국어 + English"', await p2.evaluate(() => TL.settings.profile.lang) === 'both'); await ctx2.close();
 check('no console or page errors', errors.length === 0, errors.join(' | ').slice(0, 300));
 await browser.close(); console.log(fails ? `\n${fails} FAILED` : '\nALL PASS'); process.exit(fails ? 1 : 0);

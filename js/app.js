@@ -11,7 +11,7 @@ import { importFile } from './importers.js';
 import { liveChart, timelineChart, stepTestChart, trendChart } from './charts.js';
 
 // ---------- defaults ----------
-export const APP_VERSION = '1.1.29'; // keep in sync with sw.js VERSION
+export const APP_VERSION = '1.1.30'; // keep in sync with sw.js VERSION
 const DEFAULTS = {
   profile: { birth: '1997-07-21', restHr: 52, restLactate: 0.8, restLactateAt: '2026-10-09', maxHr: 188, maxHrMode: 'tanaka', lang: 'both', theme: 'system' }, // restLactateAt: when the baseline was measured (a monthly reminder to re-measure)
   treadmill: { model: 'LTSXL', minSpeed: 0.8, maxSpeed: 18, speedStep: 0.1, maxIncline: 15, inclineStep: 0.5 },
@@ -948,6 +948,10 @@ export function oct5Fix(session, { day = '2026-10-05', value = 0.5 } = {}) {
 }
 async function runMigrations() {
   const M = A.settings.migr || (A.settings.migr = { z1117: null, oct5: null, z1118: null }); let changed = false;
+  const existed = !!M.z1118; // (an install that has run before: a fresh one gets the default settings)
+  // v1.1.30 (owner: "아직도 언어가 안 바뀌었는데?" — English first was an option to pick, the app kept Korean first): an existing install still on the
+  // default "한국어 + English" moves to "English + 한국어" once; Settings → language switches back. A language chosen on purpose (한국어 / English) is kept.
+  if (!M.lang1130) { if (existed && A.settings.profile.lang === 'both') { A.settings.profile.lang = 'enfirst'; toast('Display language: English first, Korean under it (Settings → language to change) / 표시 언어: 영어 먼저, 한국어 아래 (설정 → 언어에서 변경)'); } M.lang1130 = Date.now(); changed = true; }
   if (!M.z1118) { const p = A.settings.plan; if (!p.startDate || p.startDate < PLAN_START) p.startDate = PLAN_START; p.weekOffset = 0; if (!p.calendar) p.calendar = DEFAULT_CALENDAR; M.z1118 = Date.now(); changed = true; toast('주간 계획을 10/10 결정대로 바꿨습니다: 화 고강도 · 목 두 랩 검증 · 토 롱런 · 저녁 운동, 주 달력 10/12 시작 (설정에서 변경 가능) / Weekly plan set to the Oct 10 structure; week calendar from 10/12 (editable in Settings)', 8000); }
   if (!M.z1117) { const z = A.settings.zones || {}; const same = ['lt1Hr', 'lt2Hr', 'lt1Speed', 'lt2Speed'].every(k => z[k] === REVIEW_ZONES[k]); if (!same) { A.settings.zones = { ...z, ...REVIEW_ZONES, updatedAt: Date.now() }; toast('역치를 10/10 평가값으로 설정: LT1 143 @ 8.7 · LT2 157 @ 10.5 (설정에서 변경 가능) / Thresholds set to the Oct 10 review values', 7000); } else if (!Number.isFinite(z.testLt1Speed)) A.settings.zones.testLt1Speed = REVIEW_ZONES.testLt1Speed; M.z1117 = Date.now(); changed = true; }
   if (!M.oct5) { let n = 0; for (const sum of A.sessions) { const d = new Date(sum.startedAt); if (!(d.getFullYear() === 2026 && d.getMonth() === 9 && d.getDate() === 5)) continue; const full = await store.getSession(sum.id); const fix = oct5Fix(full); if (!fix) continue; Object.assign(full, fix); full.metrics = sessionMetrics(full); await store.putSession(full); n++; } if (n) { toast(`10/5 카드의 0.5 값 ${n}건을 비웠습니다(기록에는 남음) / emptied ${n} unreliable 0.5 value(s) on the 10/5 card (kept in the record)`, 7000); await refreshLists(); } M.oct5 = Date.now(); changed = true; }
