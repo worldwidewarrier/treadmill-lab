@@ -11,7 +11,7 @@ import { importFile } from './importers.js';
 import { liveChart, timelineChart, stepTestChart, trendChart } from './charts.js';
 
 // ---------- defaults ----------
-export const APP_VERSION = '1.1.28'; // keep in sync with sw.js VERSION
+export const APP_VERSION = '1.1.29'; // keep in sync with sw.js VERSION
 const DEFAULTS = {
   profile: { birth: '1997-07-21', restHr: 52, restLactate: 0.8, restLactateAt: '2026-10-09', maxHr: 188, maxHrMode: 'tanaka', lang: 'both', theme: 'system' }, // restLactateAt: when the baseline was measured (a monthly reminder to re-measure)
   treadmill: { model: 'LTSXL', minSpeed: 0.8, maxSpeed: 18, speedStep: 0.1, maxIncline: 15, inclineStep: 0.5 },
@@ -181,7 +181,61 @@ function swapPair(en) {
   ko.dataset.sw = '1'; ko.classList.remove('ko'); ko.classList.add('en'); en.classList.remove('en'); en.classList.add('ko');
   parent.insertBefore(en, ko);
 }
-const swapIn = root => { if (root.nodeType !== 1) return; if (root.matches('.en:not([data-sw])')) swapPair(root); root.querySelectorAll('.en:not([data-sw])').forEach(swapPair); };
+/**
+ * The rest of the English-first pass (v1.1.29, owner: "안 바뀐 부분이 있음"): Korean written inside one text, never as a pair of elements.
+ *   · "한국어 / English" in one text (field labels, the live phase label, toasts, buttons, the Plan footnote) → "English / 한국어"; only
+ *     the Korean part next to the slash moves ("Lap 1 · 8.7 km/h · 10분 값 / 10-min value" → "… · 10-min value / 10분 값").
+ *   · Korean text followed by <span class="muted">/ English</span> (the checklists) → the English first, the Korean in the muted span.
+ *   · a Korean word, a line break, then an English word (the Plan tab's days "월 / Mon") → the English word first.
+ *   · a few labels that have no English at all → "English / 한국어" from a short table (TEXT_EN).
+ * Only text is touched — never a field's value (input, textarea, select), never an element with an id; originals are kept for the way back.
+ */
+const HANGUL = /[가-힣]/;
+const TEXT_EN = { '러닝머신 km/h': 'Treadmill km/h', '경사 %': 'Incline %', '최대 km/h': 'Max km/h', '최대 경사 %': 'Max incline %', '시작 km/h': 'Start km/h', '증분 km/h': 'Step km/h', '경사 % (고정)': 'Incline % (fixed)', '고정 속도 km/h': 'Fixed speed km/h', '시작 경사 %': 'Start incline %', '경사 증분 %p': 'Incline step %p', '워밍업 km/h': 'Warm-up km/h', '종료 젖산 mmol/L': 'Stop lactate mmol/L', '인터벌 속도 km/h': 'Interval speed km/h', '상태': 'Status' };
+const TEXT_ORIG = new Map(); // text node → its Korean-first text (for the way back)
+const NO_TEXT = 'textarea,input,script,style,[data-sw]'; // (an option's text is only its label: its value stays)
+function swapText(n) {
+  const el = n.parentElement; if (!el || TEXT_ORIG.has(n) || el.closest(NO_TEXT)) return;
+  const raw = n.data; if (!HANGUL.test(raw)) return;
+  const lead = raw.match(/^\s*/)[0], trail = raw.match(/\s*$/)[0], t = raw.trim(); let out = null;
+  if (TEXT_EN[t]) out = `${TEXT_EN[t]} / ${t}`;
+  else if (t.includes('백업 JSON') && !HANGUL.test(t.replace('백업 JSON', ''))) out = t.replace('백업 JSON', 'backup JSON');
+  else {
+    let i = -1; for (let k = t.indexOf(' / '); k >= 0; k = t.indexOf(' / ', k + 1)) { const L = t.slice(0, k), R = t.slice(k + 3); if (HANGUL.test(L) && !HANGUL.test(R) && /[A-Za-z]/.test(R)) { i = k; break; } }
+    if (i >= 0) {
+      const L = t.slice(0, i); let R = t.slice(i + 3); const tail = (R.match(/\s*·\s*$/) || [''])[0]; R = R.slice(0, R.length - tail.length);
+      const h = L.search(HANGUL); const cut = L.lastIndexOf(' · ', h); const from = cut >= 0 ? cut + 3 : 0; // the Korean segment: from the last " · " before the first Korean letter
+      out = `${L.slice(0, from)}${R} / ${L.slice(from)}${tail}`;
+    }
+  }
+  if (out == null || out === t) return;
+  TEXT_ORIG.set(n, raw); n.data = lead + out + trail;
+}
+/** <span class="muted">/ English</span> after Korean text: English first. */
+function swapMuted(m) {
+  if (m.dataset.sw || !m.parentNode || HANGUL.test(m.textContent) || !/^\s*\/\s*\S/.test(m.textContent)) return;
+  const run = []; let n = m.previousSibling;
+  while (n) { if (n.nodeType === 3 || (n.nodeType === 1 && INLINE_TAGS.has(n.tagName) && !n.id && !n.dataset.sw && !n.classList.contains('muted') && !n.querySelector('input,select,button,textarea,[id],[data-action]'))) { run.unshift(n); n = n.previousSibling; } else break; }
+  m.dataset.sw = '1'; if (!run.some(x => HANGUL.test(x.textContent))) return;
+  const parent = m.parentNode, en = document.createElement('span'), ko = document.createElement('span');
+  en.dataset.sw = '1'; ko.dataset.sw = '1'; ko.className = 'muted'; en.textContent = m.textContent.replace(/^\s*\/\s*/, '') + ' ';
+  parent.insertBefore(en, run[0]); parent.insertBefore(ko, run[0]); ko.appendChild(document.createTextNode('/ ')); for (const x of run) ko.appendChild(x);
+  m.remove(); // (its English now leads the line; switching back repaints the screen)
+}
+/** "월<br><span>Mon</span>": the English word first. */
+function swapStacked(br) {
+  const ko = br.previousSibling, en = br.nextSibling;
+  if (!ko || !en || ko.nodeType !== 3 || en.nodeType !== 1 || en.dataset.sw || !HANGUL.test(ko.data) || HANGUL.test(en.textContent) || !/[A-Za-z]/.test(en.textContent) || en.id || en.querySelector('*')) return;
+  en.dataset.sw = '1'; const k = document.createElement('span'); k.dataset.sw = '1'; k.className = en.className; br.parentNode.insertBefore(k, ko); k.appendChild(ko);
+  en.className = ''; br.parentNode.insertBefore(en, k); br.parentNode.insertBefore(br, k);
+}
+const swapIn = root => {
+  if (root.nodeType === 3) { swapText(root); return; } if (root.nodeType !== 1) return;
+  if (root.matches('.en:not([data-sw])')) swapPair(root); root.querySelectorAll('.en:not([data-sw])').forEach(swapPair);
+  if (root.matches('span.muted:not([data-sw])')) swapMuted(root); root.querySelectorAll('span.muted:not([data-sw])').forEach(swapMuted);
+  root.querySelectorAll('br').forEach(swapStacked);
+  const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT); const list = []; for (let n; (n = w.nextNode());) list.push(n); list.forEach(swapText);
+};
 let langObserver = null;
 function applyLang() {
   const on = A.settings.profile.lang === 'enfirst'; document.documentElement.classList.toggle('lang-enfirst', on);
@@ -190,6 +244,7 @@ function applyLang() {
 }
 /** Back to Korean first without a reload (a session may be running): every swapped pair goes back to its order and classes (the screens repaint anyway; this is for what stays, the tab bar). */
 function unswapAll() {
+  for (const [n, raw] of TEXT_ORIG) if (n.isConnected) n.data = raw; TEXT_ORIG.clear();
   document.querySelectorAll('.ko[data-sw]').forEach(en => { const ko = en.nextSibling; if (ko && ko.nodeType === 1 && ko.dataset.sw && ko.classList.contains('en')) { en.parentNode.insertBefore(ko, en); ko.classList.remove('en'); ko.classList.add('ko'); en.classList.remove('ko'); en.classList.add('en'); delete ko.dataset.sw; } delete en.dataset.sw; });
   document.querySelectorAll('[data-sw]').forEach(n => { delete n.dataset.sw; });
 }
