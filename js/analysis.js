@@ -35,7 +35,7 @@ export function summarizeStages(session, { a1WindowSec = 60, smo2WindowSec = 60 
     if (list(session.hrLive).length) { const h = list(session.hrLive).filter(p => p[0] >= w0 && p[0] <= w1 && p[1] > 0).map(p => p[1]); hr = mean(h); }
     if (!Number.isFinite(hr)) hr = mean(fh.map(p => p.hr));
     const row = {
-      idx: st.idx, speed: st.speed, incline: st.incline, lactate: st.lactate, rpe: st.rpe,
+      idx: st.idx, speed: st.speed, incline: st.incline, ...stageLactate(st), rpe: st.rpe,
       durationSec: (st.tEnd - st.tStart) / 1000,
       hr, alpha1: mean(f.map(p => p.alpha1)), alpha1n: f.length,
       artifactPct: mean(fh.map(p => p.artifactPct)),
@@ -628,10 +628,21 @@ export function triangulate({ lactate, hrv, smo2, stageCount = 0 }) {
   return { lt1, lt2, grade1: gradeOf(lt1), grade2: gradeOf(lt2) };
 }
 
+/**
+ * The lactate of a stage (v1.1.31). Two strips within 0.5 mmol/L of each other are a duplicate: their mean is used and the stage is
+ * marked, so LT1 can use baseline + 0.3 when the lowest stage was measured twice (10/10 decision). Two strips further apart are not
+ * averaged: the first is kept, as before.
+ */
+export function stageLactate(st) {
+  const a = st.lactate, b = st.lactate2;
+  if (Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= 0.5) return { lactate: Math.round((a + b) / 2 * 100) / 100, lactateDup: true, lactateN: 2 };
+  return { lactate: a, lactateDup: false, lactateN: Number.isFinite(a) ? 1 : 0 };
+}
+
 /** Convenience: run the full analysis on a session object. */
 export function analyzeSession(session) {
   const rows = summarizeStages(session);
-  const lacStages = rows.filter(r => Number.isFinite(r.lactate)).map(r => ({ x: r.speed, la: r.lactate, hr: r.hr }));
+  const lacStages = rows.filter(r => Number.isFinite(r.lactate)).map(r => ({ x: r.speed, la: r.lactate, hr: r.hr, dup: !!r.lactateDup }));
   const lactate = lacStages.length >= 3 ? analyzeLactate(lacStages) : null;
   const hrv = ALPHA_ON ? hrvThresholds(rows) : null;
   const smo2 = smo2Breakpoints(rows);

@@ -7,7 +7,7 @@ export const DEFAULT_PROTOCOL = {
   type: 'speed',            // 'speed' (incline fixed) | 'incline' (speed fixed)
   incline: 1.0, startSpeed: 6.0, speedStep: 1.0,
   fixedSpeed: 7.0, startIncline: 1.0, inclineStep: 2.0,
-  stageSec: 180, pauseSec: 30, warmupSec: 300, warmupSpeed: 5.5,
+  stageSec: 240, pauseSec: 30, warmupSec: 300, warmupSpeed: 5.5,
   stopLactate: 6.0, stopHrPct: 95, maxStages: 12, // (v1.1.23: the RPE stop criterion is gone — heart rate ≥ stopHrPct % of max replaces it)
 };
 const wall = () => (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now()); // real time, also for demo / replay sources that run on a fast data clock
@@ -206,7 +206,7 @@ export class SessionEngine {
   }
   enterLactate(value, stageIdx = null) {
     const idx = stageIdx ?? this.pendingLactate; const st = this.stages.find(s => s.idx === idx) || this.stages[this.stages.length - 1];
-    if (st && value != null && Number.isFinite(value)) { if (st.lactate != null && st.lactate !== value) st.lactate2 = value; else st.lactate = value; }
+    if (st && value != null && Number.isFinite(value)) { if (st.lactate != null) st.lactate2 = value; else st.lactate = value; /* a second strip at the same stage (v1.1.31: kept even when equal — a duplicate) */ }
     const now = this.now(); this.pendingLactate = null; this.events.push({ t: now, type: 'lactate', stage: st ? st.idx : null, rep: this.rep, phase: this.phase, value, ...this.sampleTags(now) });
     if (value >= this.protocol.stopLactate && !this.stopAdvised && this.mode === 'test') { this.stopAdvised = true; this.alerts?.cue(VOICE.stop_criteria(), { beep: 'triple' }); }
     this.onUpdate(this.view());

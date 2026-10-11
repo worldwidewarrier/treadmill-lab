@@ -148,6 +148,12 @@ export function obla(stages, level = 4) {
   return { x, la: level };
 }
 
+/** LT1 by baseline + Δ: Δ = 0.3 when the lowest stage was measured with two strips (st.dup), 0.5 otherwise (10/10 decision; v1.1.31). */
+function baselineEntry(st, wrap) {
+  const lo = Math.min(...st.map(s => s.la)); const dup = st.some(s => s.la === lo && s.dup); const d = dup ? 0.3 : 0.5; // the lowest value (any stage that has it) measured twice
+  const e = wrap(`baseline+${d}`, lt1Baseline(st, d)); if (dup) e.note = 'lowest stage measured twice / 최저 단계 2회 측정'; return e;
+}
+
 /** Full lactate analysis: all methods + HR mapping. */
 export function analyzeLactate(stages) {
   const st = stages.filter(s => Number.isFinite(s.x) && Number.isFinite(s.la)).sort((a, b) => a.x - b.x);
@@ -160,7 +166,7 @@ export function analyzeLactate(stages) {
   const out = {
     stages: st,
     curve: st.length >= 3 ? lactateCurve(st) : null,
-    lt1: [wrap('baseline+0.5', lt1Baseline(st, 0.5)), wrap('log-log', ll), wrap('OBLA 2.0', obla(st, 2))],
+    lt1: [baselineEntry(st, wrap), wrap('log-log', ll), wrap('OBLA 2.0', obla(st, 2))],
     lt2: [wrap('Log-Poly-ModDmax', lt2ModDmax(st, ll.x)), wrap('Dmax', lt2Dmax(st)), wrap('OBLA 4.0', obla(st, 4))],
   };
   out.lt1Primary = out.lt1[0]; out.lt2Primary = out.lt2[0];

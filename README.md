@@ -67,7 +67,7 @@ H10은 블루투스 2개 + ANT+를 동시에 지원하므로 이 앱(RR) + Train
 ## 4. 계산 방법 · Methods
 
 - **DFA α1**: FatMaxxer `alpha1v2`와 동일 — 2분 창, 5초 갱신, smoothness-priors 디트렌딩(λ=500), FatMaxxer 스케일(3–15박), 전진+후진 박스, log2 기울기. 아티팩트: 직전 RR 대비 ±5%(HR>95)/±25%(HR<80) Auto. `test/test_dfa.mjs`가 FatMaxxer 자체 테스트 벡터(1.5503173…)와 독립 numpy 구현에 대해 1e-9 이내 일치를 확인합니다.
-- **젖산**: LT1 = 기저치 +0.5 mmol/L (보조: log-log, OBLA 2.0); LT2 = Log-Poly-ModDmax (보조: Dmax, OBLA 4.0). 3차 다항 곡선, 심박은 단계 간 선형 보간.
+- **젖산**: LT1 = 기저치 +0.5 mmol/L (최저 단계를 스트립 2장으로 쟀으면 +0.3; 보조: log-log, OBLA 2.0); LT2 = Log-Poly-ModDmax (보조: Dmax, OBLA 4.0). 3차 다항 곡선, 심박은 단계 간 선형 보간. 기본 단계 4분(v1.1.31 — 4분 단계의 ModDmax가 MLSS와 가장 잘 맞음, Jamnick 2018). 한 단계의 스트립 2장은 차이 0.5 이내면 평균(표에 ×2). / LT1 = baseline + 0.5 (+0.3 when the lowest stage has two strips); 4-min stages by default; two strips within 0.5 are averaged.
 - **HRVT**: 단계 마지막 60초 α1(윈도우가 단계 안에 완전히 들어오도록) vs 심박 회귀 → 0.75 / 0.5.
 - **SmO2**: 단계 마지막 60초 평균 vs 속도의 2-분절 선형 회귀 → BP1/BP2, 2분 기울기 < −0.5 %/min = 비정상 상태.
 - **SmO2 (일정 부하 세션)**: 5–10분 평균 vs 마지막 5분 평균(드리프트), 마지막 10분 기울기 > −0.3 %/min = 안정 상태, THb 평균 < 12 = 접촉 불량 의심. 젖산 검증 카드·요약·CSV에 표시.
