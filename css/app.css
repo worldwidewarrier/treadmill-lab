@@ -123,3 +123,11 @@ table.wrap-first th:first-child, table.wrap-first td:first-child { white-space: 
 .file-drop { border: 1px dashed var(--line); border-radius: var(--radius); padding: 14px; text-align: center; color: var(--muted); }
 details summary { cursor: pointer; color: var(--muted); font-size: 0.9rem; }
 @media (min-width: 560px) { .live-big { grid-template-columns: 1fr 1fr 1fr; } .live-big.single { grid-template-columns: 1fr; } .metric .val { font-size: 3.6rem; } }
+/* a session's description behind its title (v1.1.27): the title, numbers and warm-up line stay; tap the title for the rest */
+details.desc > summary { list-style: none; display: flex; align-items: flex-start; gap: 8px; color: inherit; font-size: inherit; -webkit-tap-highlight-color: transparent; }
+details.desc > summary::-webkit-details-marker { display: none; }
+details.desc > summary > .grow { flex: 1; min-width: 0; }
+details.desc > summary h3 { margin-bottom: 2px; }
+details.desc > summary .chev { flex: none; width: 26px; height: 26px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 50%; color: var(--muted); font-size: 0.8rem; line-height: 1; transition: transform 0.15s ease; }
+details.desc[open] > summary .chev { transform: rotate(180deg); }
+details.desc > .desc-body { margin: 6px 0 2px; padding-left: 10px; border-left: 2px solid var(--line); }

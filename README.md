@@ -108,6 +108,7 @@ node test/ui_sw.mjs                # service worker: install, offline start, upd
 node test/ui_twolap.mjs            # the two-lap check through the UI with the demo strap: setup, prompts, card, CSV, band change on Home, Settings, one-time fixes
 node test/ui_warmup.mjs            # the speed to set, on the screen: the warm-up line on Home / Plan / setup cards, the large banner step by step in every mode, the voice, the speed field (demo strap, ≈ 2 min)
 node test/ui_measured.mjs          # a measured result on record (the 10/11 check rebuilt): next test speed on Home / Plan / setup / live banner, speeds unchanged after one pass and +0.2 after the band change, the multi-day curve around LT1 (no LT2, apply closed, the reason)
+node test/ui_desc.mjs              # each session's description behind its title (Home, Plan, every setup card): closed, opens on a tap, stays open across repaints
 ```
 
 Tests that need the owner's private exports skip those parts when the files are absent (`test/data/README.md`). Screenshots go to `$TL_SHOTS` (default: a temp folder).
