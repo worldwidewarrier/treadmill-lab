@@ -23,7 +23,7 @@ await page.click('[data-action=connect]'); await page.waitForSelector('[data-act
 await page.click('[data-action=start]'); await page.waitForSelector('#lv-zone');
 await page.waitForTimeout(6000); // ≈6 min of data: past the 0–5-min easy jog, before the band is judged (10:00)
 const preCls = await page.getAttribute('#lv-zone', 'class'); const preTxt = await page.textContent('#lv-zone-text');
-check('LT1 banner before 10:00 says the band is not judged yet (v1.1.25)', /rest/.test(preCls) && /판정은 10:00부터/.test(preTxt), preCls + ' ' + preTxt);
+check('LT1 banner before 10:00 says the band is not judged yet (v1.1.25) and, from 5:00, shows the session\'s one speed (v1.1.26: 9.3, the middle of 8.9–9.6)', /warm/.test(preCls) && !/\b(in|above|below)\b/.test(preCls) && /판정은 10:00부터/.test(preTxt) && /본 속도9\.3km\/h/.test(preTxt) && !/–/.test(preTxt), preCls + ' ' + preTxt);
 await page.waitForFunction(() => (TL.engine?.view?.().elapsedSec || 0) >= 615, null, { timeout: 20000 }); // ≈10.25 min: judging has begun
 await page.waitForTimeout(600);
 const zoneCls = await page.getAttribute('#lv-zone', 'class'); const zoneTxt = await page.textContent('#lv-zone-text');

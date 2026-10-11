@@ -57,6 +57,8 @@ export function t(key, vars) {
 export function tx(key, vars) { const s = S[key]; if (!s) return key; return fmtTemplate(langMode === 'en' ? s.en : s.ko, vars); }
 
 // Korean voice prompts (spoken) — kept short for a treadmill.
+/** "…로" after a number as it is read: 영·삼·육 end in a consonant → 으로, the other digits → 로 ("7.0으로", "8.5로"). */
+const ro = n => (/[036]$/.test(String(n)) ? '으로' : '로');
 export const VOICE = {
   stage_start: (n, speed, incline) => `${n}단계. 시속 ${speed} 킬로미터${incline ? `, 경사 ${incline}퍼센트` : ''}.`,
   stage_warn: (sec) => `${sec}초 후 채혈 정지.`,
@@ -69,15 +71,15 @@ export const VOICE = {
   alpha_low: () => '알파1 낮음. 강도를 낮추세요.',
   alpha_ok: () => '알파1 정상.',
   interval_work: (n, total) => `${n}번째 인터벌 시작. 총 ${total}회.`,
-  interval_rest: (W) => W ? `회복. 시속 ${W.recLo}에서 ${W.recHi}.` : '회복. 천천히.',
-  // warm-up intensities spoken at the start of every mode (v1.1.25); W = meta.warmup {lo, hi, sub, ramp, recLo, recHi, walk, bandLo, bandHi}
+  interval_rest: (W) => W ? `회복. 시속 ${W.rec}.` : '회복. 천천히.',
+  // warm-up intensities spoken at the start of every mode (v1.1.25); W = meta.warmup = prescribe.sessionSpeeds {jog, hi, sub, ramp, easy, rec, walk} — one speed each, no ranges (v1.1.26)
   test_warmup: (min, speed) => `워밍업 ${min}분. 걷기, 시속 ${speed}.`,
-  lt2_warmup: (min, W) => W ? `워밍업 ${min}분. 시속 ${W.hi}. 4분에 ${W.sub}, 7분에 ${W.ramp}.` : `워밍업 ${min}분. 쉬운 조깅.`,
-  lt2_ramp: (speed) => `시속 ${speed}로.`,
-  lt2_cooldown: (W) => W ? `마지막 인터벌 끝. 쿨다운 6분. 3분 시속 ${W.lo}, 3분 걷기 ${W.walk}.` : '마지막 인터벌 끝. 쿨다운.',
-  verify_warmup: (W, mlss) => W ? (mlss ? `워밍업 5분. 2분 시속 ${W.hi}, 3분 ${W.sub}.` : `워밍업 5분. 30초 걷기 ${W.walk}, 그 다음 시속 ${W.lo}에서 ${W.hi}.`) : '워밍업 5분. 쉬운 조깅.',
-  lt1_warmup: (W) => W ? `워밍업 5분. 시속 ${W.lo}에서 ${W.hi}.` : '워밍업 5분. 쉬운 조깅.',
-  lt1_main: (W) => W && W.bandLo ? `본 속도로. 시속 ${W.bandLo}에서 ${W.bandHi}. 판정은 10분부터.` : '본 속도로. 판정은 10분부터.',
+  lt2_warmup: (min, W, steps = []) => W ? `워밍업 ${min}분. 시속 ${W.hi}.${steps.length > 1 ? ` ${steps.slice(1).map(s => `${+(s.fromSec / 60).toFixed(1)}분에 ${s.speed}`).join(', ')}.` : ''}` : `워밍업 ${min}분. 쉬운 조깅.`, // steps = session.warmupSteps: the ramp is announced at the minutes its cues come ("4분에 8.5, 7분에 9.5" in a 10-min warm-up; v1.1.26)
+  lt2_ramp: (speed) => `시속 ${speed}${ro(speed)}.`,
+  lt2_cooldown: (W) => W ? `마지막 인터벌 끝. 쿨다운 6분. 3분 시속 ${W.jog}, 3분 걷기 ${W.walk}.` : '마지막 인터벌 끝. 쿨다운.',
+  verify_warmup: (W, mlss) => W ? (mlss ? `워밍업 5분. 2분 시속 ${W.hi}, 3분 ${W.sub}.` : `워밍업 5분. 30초 걷기 ${W.walk}, 그 다음 시속 ${W.jog}.`) : '워밍업 5분. 쉬운 조깅.',
+  lt1_warmup: (W) => W ? `워밍업 5분. 시속 ${W.jog}.` : '워밍업 5분. 쉬운 조깅.',
+  lt1_main: (speed) => speed ? `본 속도로. 시속 ${speed}. 판정은 10분부터.` : '본 속도로. 판정은 10분부터.', // speed = the session's own speed (the field of its card), else the easy speed
   lt1_judge: () => '판정 시작.',
   lt1_end: (W) => `목표 시간 완료. 쿨다운 3분, 걷기 시속 ${W ? W.walk : 5.5}.`,
   stop_criteria: () => '종료 기준 도달. 이번 단계 후 종료하세요.',

@@ -86,6 +86,12 @@ table.wrap-first th:first-child, table.wrap-first td:first-child { white-space: 
 .zone-banner.above { background: color-mix(in srgb, var(--bad) 18%, var(--surface)); border-color: color-mix(in srgb, var(--bad) 45%, transparent); color: var(--bad); }
 .zone-banner.below { background: color-mix(in srgb, var(--info) 18%, var(--surface)); border-color: color-mix(in srgb, var(--info) 45%, transparent); color: var(--info); }
 .zone-banner.rest { color: var(--muted); }
+/* where there is a speed to set and no zone to judge (warm-up, recovery, cool-down) the banner is that speed, large, with what comes next under it (v1.1.26) */
+.zone-banner.warm { background: color-mix(in srgb, var(--accent) 16%, var(--surface)); border-color: color-mix(in srgb, var(--accent) 50%, transparent); color: var(--fg); }
+.zone-banner .dot { flex: none; } .zone-banner.warm .dot { background: var(--accent); }
+.zone-banner .wu { display: grid; gap: 2px; min-width: 0; } .zone-banner .wu-now { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 8px; }
+.zone-banner .wu-speed { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 2.4rem; font-weight: 500; line-height: 1.1; letter-spacing: -0.02em; }
+.zone-banner .wu-next { font-size: 0.9rem; font-weight: 500; color: var(--muted); }
 .phase { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; }
 .phase .big { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 2.4rem; font-weight: 500; line-height: 1.1; }
 .phase.pause { border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); background: color-mix(in srgb, var(--warn) 10%, var(--surface)); }

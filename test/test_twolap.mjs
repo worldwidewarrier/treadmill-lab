@@ -2,10 +2,11 @@
 // two-lap verdict (pass / borderline / fail, strict rule beyond a 3-min gap, durability flag); the band finder (next test speed,
 // band change only after two consecutive results); the multi-day curve rules (lap-1 minutes 5–10, single runs minutes 8–13,
 // > 35 min = durability); the MLSS rule (≤ 0.5 raise, 0.5–1.0 hold, no raise after a long stop); the LT1 late ceiling;
-// the long-run cap; the α1 artifact gate; the monthly resting-lactate reminder.
+// the long-run cap; the α1 artifact gate; the monthly resting-lactate reminder. v1.1.26: a real check rebuilt from its summary
+// (2026-10-11) → next test speed, no band change, the speeds the sessions name; what the points of the curve can carry.
 import { SessionEngine, DEFAULT_LAPS, LATE_FROM_SEC } from '../js/session.js';
 import { runTimeline, lapsFromEvents, hrvThresholds, ALPHA_ARTIFACT_MAX } from '../js/analysis.js';
-import { lactateChecks, lactateVerdict, lapStats, bandFinder, multiDayCurve, verdictZoneChange, setRestBaseline, setTestLowest, lactateFloor, testLowest, weeklyPlan, longestRecentMin, sessionTargets, computeZones, assessRecent, sessionMetrics, claudeSummary, midLabel, earlyWindowHr } from '../js/prescribe.js';
+import { lactateChecks, lactateVerdict, lapStats, bandFinder, multiDayCurve, verdictZoneChange, setRestBaseline, setTestLowest, lactateFloor, testLowest, weeklyPlan, longestRecentMin, sessionTargets, sessionSpeeds, computeZones, assessRecent, sessionMetrics, claudeSummary, midLabel, earlyWindowHr, CURVE_LT2_MIN_LA } from '../js/prescribe.js';
 let failures = 0; const check = (n, c, d = '') => { console.log((c ? 'PASS ' : 'FAIL ') + n + (d ? '  ' + d : '')); if (!c) failures++; };
 const spoken = []; const alerts = { speak(t) { spoken.push(t); }, cue(t) { if (t) spoken.push(t); }, keepAwake: async () => true, beep() {}, vibrate() {} };
 const settings = { protocol: {}, treadmill: {}, alpha1: { artifactMode: 'auto', windowSec: 120, stepSec: 5, lambda: 500 }, alerts: { zoneExitSec: 30 } };
@@ -127,6 +128,28 @@ setRestBaseline(0.8); setTestLowest(null);
   const bb = bandFinder([twoLapRun({ speed: 8.7, lap1: 1.2, end: 1.5, daysAgo: 7, id: 'wb1' }), twoLapRun({ speed: 8.7, lap1: 1.2, end: 1.5, daysAgo: 0.5, id: 'wb2' })], Z);
   check('two borderlines: same speed, no band change', bb.nextSpeed === 8.7 && bb.streak.n === 2 && bb.change === null);
 }
+// ───────────── 3a. A real check, rebuilt from its summary (v1.1.26) ─────────────
+// 2026-10-11, the first two-lap run on a real strap: 8.7 km/h, lap 1 0.9 (37 s after the stop) → end 0.8, gap 63 s, lap-1 heart rate
+// (minutes 5–10) 145, lap 2 from 144 (minutes 1–6) to 151 (last 5 min). Finish was pressed 29 s after the lap-2 clock, before the
+// prompt, and the end value typed in the card afterwards. What follows from it — and what does not.
+{
+  setRestBaseline(0.8); setTestLowest(null);
+  const Z = { lt1Hr: 143, lt1Speed: 8.7, lt2Hr: 157, lt2Speed: 10.5, testLt1Speed: 8.7 };
+  const real = ({ speed = 8.7, lap1 = 0.9, end = 0.8, daysAgo = 0.2, id = 'oct11', up = 0 } = {}) => {
+    const s = twoLapRun({ speed, lap1, gapSec: 63, sampleAt: 37, endSample: false, daysAgo, id, hr: () => 145 + up, hrLap2: sec => { const i = sec - 600; return (i < 360 ? 144 : Math.min(151.3, 144 + 7.3 * (i - 360) / 1140)) + up; } });
+    s.lactateChecks = { end }; s.lactateChecksV = 2; return s; };
+  const s = real(); const vd = lactateVerdict(s), ls = lapStats(s), c = lactateChecks(s), tl = runTimeline(s);
+  check('the 10/11 check: the lap clock ends the run (nothing was typed at the stop); lap 1 0.9 from the gap, end 0.8 from the card, gap 63 s', tl.how === 'phase' && tl.sure && c.mid === 0.9 && c.end === 0.8 && Math.abs(c.gapSec - 63) <= 1, `${tl.how} ${tl.sure} ${JSON.stringify(c)}`);
+  check('  lap-1 heart rate 145; lap-2 drift ≈ +7 bpm — under the 8 bpm of the durability flag', Math.abs(ls.lap1Hr - 145) < 0.5 && ls.lap2Drift > 6.5 && ls.lap2Drift < 8, JSON.stringify({ hr: ls.lap1Hr, drift: ls.lap2Drift }));
+  check('  verdict: pass, next +0.2, no durability flag — in the words of the summary', vd.level === 'ok' && vd.next === 0.2 && vd.durability === false && /^Pass @ 8\.7 km\/h: lap 1 0\.9 → end 0\.8 \(rise -0\.1, gap 6[34] s\) · lap-2 drift \+7 bpm — lap 1 ≤ line 1\.3, rise ≤ 0\.5\./.test(vd.en), vd.en);
+  const b1 = bandFinder([s], Z);
+  check('  band finder: the next check at 8.9 km/h; one result changes no zone', b1.nextSpeed === 8.9 && b1.step === 0.2 && b1.change === null && b1.streak.n === 1, b1.en);
+  check('  so the speeds the sessions name are still those of LT1 8.7: jog 7.0, easy run 8.1, recovery 6.5', (W => W.jog === '7.0' && W.easy === '8.1' && W.rec === '6.5')(sessionSpeeds(Z)), JSON.stringify(sessionSpeeds(Z)));
+  const s2 = real({ speed: 8.9, lap1: 1.0, end: 1.0, daysAgo: 0.05, id: 'next', up: 2 }); const b2 = bandFinder([s, s2], Z);
+  check('a second pass, at 8.9 with a lap-1 heart rate of 147: the band change LT1 8.7 → 8.9 km/h, 143 → 147 bpm is offered; next 9.0 (the cap)', b2.change && b2.change.zones.lt1Speed === 8.9 && b2.change.zones.lt1Hr === 147 && b2.nextSpeed === 9.0 && b2.capped === true, JSON.stringify({ next: b2.nextSpeed, change: b2.change?.zones }));
+  const W2 = b2.change ? sessionSpeeds(b2.change.zones) : {}; const T2 = b2.change ? sessionTargets(b2.change.zones, 'lt1') : {};
+  check('  …and with it every speed moves up 0.2: jog 7.2, ramp 7.7 → 8.7, easy run 8.3 (band 7.9–8.6), recovery 6.7; heart-rate band 137–144, ceiling 152', W2.jog === '7.2' && W2.hi === '7.7' && W2.sub === '8.7' && W2.easy === '8.3' && W2.rec === '6.7' && W2.ramp === '9.5' && T2.speedLo === 7.9 && T2.speedHi === 8.6 && T2.hrLo === 137 && T2.hrHi === 144 && T2.ceilHr === 152, JSON.stringify({ W2, T2 }));
+}
 // ───────────── 4. The multi-day curve rules ─────────────
 {
   setRestBaseline(0.8);
@@ -152,15 +175,34 @@ setRestBaseline(0.8); setTestLowest(null);
   const mlss = multiDayCurve([twoLapRun({ purpose: 'mlss', speed: 10.5, lap1: 3.2, end: 3.6, lap2Min: 20, id: 'c20' })]);
   check('an MLSS two-lap run (lap 2 = 20 min) is a point at 10.5 km/h', mlss.points.length === 1 && mlss.points[0].x === 10.5 && mlss.points[0].la === 3.6);
   check('earlyWindowHr of a 12-min run: NaN (minutes 8–13 are not there)', Number.isNaN(earlyWindowHr(single(8.0, 1.0, drifting(132), { durSec: 720 }))));
+  // v1.1.26 — what the points can carry (multiDayCurve().trust). The weekly checks put the points close together around LT1: the runs
+  // of 10/4–10/11 are 7.8 → 0.8 (the long run's 30-min value), 8.5 → 1.0, 8.7 → 0.8 (the check) and 9.0 → 2.8; line = 0.8 + 0.5 = 1.3.
+  const at = hr => () => hr;
+  const r78 = single(7.8, 1.9, at(135), { durSec: 5400, mid: 0.8, midSec: 1800, daysAgo: 1 }), r85 = single(8.5, 1.0, at(141), { durSec: 2100, daysAgo: 2 }), r90 = single(9.0, 2.8, at(146), { durSec: 2100, daysAgo: 7 });
+  const r87 = twoLapRun({ speed: 8.7, lap1: 0.9, end: 0.8, id: 'k87', hr: () => 145, daysAgo: 0.2 }), r89 = twoLapRun({ speed: 8.9, lap1: 1.0, end: 1.0, id: 'k89', hr: () => 147, daysAgo: 0.05 });
+  const c4 = multiDayCurve([r78, r85, r87, r90]); const L4 = c4.analysis.lt1Primary;
+  check('four points around LT1 (three under the line, 9.0 at 2.8): LT1 between 8.7 and 9.0 with the heart rate of those points; no LT2; nothing to apply', c4.points.length === 4 && c4.trust.lt1.ok && c4.trust.lt1.lo === 8.7 && c4.trust.lt1.hi === 9 && L4.x >= 8.7 && L4.x <= 9.0 && L4.hr >= 145 && L4.hr <= 146 && c4.trust.lt2.why === 'none' && !Number.isFinite(c4.analysis.lt2Primary.x) && c4.trust.apply === false, JSON.stringify({ x: L4.x, hr: L4.hr, trust: c4.trust }));
+  const c5 = multiDayCurve([r78, r85, r87, r89, r90]); const L5 = c5.analysis.lt1Primary;
+  check('a fifth point (8.9 → 1.0, a pass): on its own the cubic crosses the line under 8.5 km/h and puts its Dmax inside the points (under 9.0)', c5.points.length === 5 && c5.trust.raw.lt1.x < 8.5 && Number.isFinite(c5.trust.raw.lt2.x) && c5.trust.raw.lt2.x < 9.0, JSON.stringify(c5.trust.raw));
+  check('  …LT1 is read between the two points on either side of the line instead (8.9 and 9.0), with their heart rate', c5.trust.lt1.ok && c5.trust.lt1.fixed === true && c5.trust.lt1.lo === 8.9 && c5.trust.lt1.hi === 9 && L5.x > 8.9 && L5.x < 9.0 && L5.hr >= 146 && L5.hr <= 147, JSON.stringify({ x: L5.x, hr: L5.hr }));
+  check('  …LT2 is withheld — the points stop at 2.8 mmol/L, under CURVE_LT2_MIN_LA (4.0) — and the curve cannot be applied', CURVE_LT2_MIN_LA === 4 && c5.trust.lt2.ok === false && c5.trust.lt2.why === 'not-reached' && c5.trust.lt2.maxLa === 2.8 && !Number.isFinite(c5.analysis.lt2Primary.x) && !Number.isFinite(c5.analysis.lt2Primary.hr) && c5.trust.apply === false, JSON.stringify(c5.trust.lt2));
+  const cU = multiDayCurve([r78, r85, r87, r89]);
+  check('every point under the line: LT1 lies above the fastest one (8.9 km/h) — not reached, no value, nothing to apply', cU.trust.lt1.ok === false && cU.trust.lt1.why === 'not-reached' && cU.trust.lt1.lo === 8.9 && !Number.isFinite(cU.analysis.lt1Primary.x) && cU.trust.apply === false, JSON.stringify(cU.trust.lt1));
+  const wide = [single(8, 1.1, at(128), { daysAgo: 9 }), single(9, 1.3, at(137), { daysAgo: 7 }), single(10, 1.8, at(146), { daysAgo: 5 }), single(11, 2.7, at(154), { daysAgo: 3 })];
+  const cW = multiDayCurve([...wide, single(12, 4.2, at(162), { daysAgo: 1 })]);
+  check('a curve across both thresholds that reaches 4.2 mmol/L: the fit stands as it is and can be applied', cW.trust.apply === true && cW.trust.lt1.fixed === false && cW.analysis.lt1Primary.x === cW.trust.raw.lt1.x && cW.analysis.lt2Primary.x === cW.trust.raw.lt2.x && cW.analysis.lt2Primary.x > cW.analysis.lt1Primary.x && cW.analysis.lt1Primary.x > 9 && cW.analysis.lt1Primary.x < 10, JSON.stringify({ lt1: cW.analysis.lt1Primary.x, lt2: cW.analysis.lt2Primary.x }));
+  const cS = multiDayCurve([...wide, single(11.5, 3.6, at(158), { daysAgo: 1 })]);
+  check('the same curve stopping at 3.6: LT1 stands, LT2 is withheld, nothing to apply', cS.trust.lt1.ok && cS.trust.lt2.why === 'not-reached' && !Number.isFinite(cS.analysis.lt2Primary.x) && cS.trust.apply === false, JSON.stringify(cS.trust));
+  check('fewer than three points: no analysis, no trust record', multiDayCurve([r85, r87]).analysis === null && multiDayCurve([r85, r87]).trust === null);
 }
 // ───────────── 5. LT1 session: late ceiling LT1 + 5 ─────────────
 {
   const zones = computeZones({ lt1Hr: 143, lt2Hr: 157, lt1Speed: 8.7, lt2Speed: 10.5, maxHr: 188 }); const T = sessionTargets(zones, 'lt1', { minutes: 50 });
   check('LT1 targets carry the ceiling 148 (LT1 + 5) from minute 20', T.hrLo === 133 && T.hrHi === 140 && T.ceilHr === 148 && T.lateFromSec === 1200, JSON.stringify(T));
   check('LT1 targets say the band is judged from minute 10 (judgeFromSec 600)', T.judgeFromSec === 600);
-  spoken.length = 0; const src = new ClockSource(now); const eng = new SessionEngine({ settings, alerts }); eng.setSource(src); eng.configure({ mode: 'lt1', targets: T, meta: { speed: 8.3, incline: 1, warmup: { lo: '7.0', hi: '7.5', sub: '8.5', ramp: '9.5', recLo: '6.5', recHi: '7.0', walk: '5.5', bandLo: '7.7', bandHi: '8.4' } } }); eng.start(); clearInterval(eng.timer);
-  check('LT1 start: the warm-up intensity is spoken (v1.1.25)', spoken.some(t => /워밍업 5분. 시속 7.0에서 7.5/.test(t)), spoken.join(' | '));
-  src.run(300, 118); check('5:00: the main speed and "judged from minute 10"', spoken.some(t => /본 속도로. 시속 7.7에서 8.4. 판정은 10분부터/.test(t)), spoken.join(' | '));
+  spoken.length = 0; const src = new ClockSource(now); const eng = new SessionEngine({ settings, alerts }); eng.setSource(src); eng.configure({ mode: 'lt1', targets: T, meta: { speed: 8.3, incline: 1, warmup: { jog: '7.0', hi: '7.5', sub: '8.5', ramp: '9.5', easy: '8.1', rec: '6.5', walk: '5.5' } } }); eng.start(); clearInterval(eng.timer);
+  check('LT1 start: the warm-up speed is spoken (v1.1.25) — one speed, 7.0 (v1.1.26)', spoken.some(t => t === '워밍업 5분. 시속 7.0.'), spoken.join(' | '));
+  src.run(300, 118); check('5:00: the main speed — the session\'s own, 8.3 — and "judged from minute 10"', spoken.some(t => t === '본 속도로. 시속 8.3. 판정은 10분부터.'), spoken.join(' | '));
   src.run(240, 150);
   check('0–9 min: a low warm-up heart rate and even 4 min at 150 give no zone cue (judged from minute 10)', !spoken.some(t => /심박/.test(t)), spoken.join(' | '));
   src.run(60, 138); check('10:00: "판정 시작"', spoken.some(t => /판정 시작/.test(t)));
@@ -189,19 +231,19 @@ setRestBaseline(0.8); setTestLowest(null);
 }
 // ───────────── 6a. Warm-up intensities spoken in the LT2 and two-lap modes (v1.1.25) ─────────────
 {
-  const W = { lo: '7.0', hi: '7.5', sub: '8.5', ramp: '9.5', recLo: '6.5', recHi: '7.0', walk: '5.5', bandLo: '7.7', bandHi: '8.4' };
+  const W = { jog: '7.0', hi: '7.5', sub: '8.5', ramp: '9.5', easy: '8.1', rec: '6.5', walk: '5.5' };
   spoken.length = 0; let src = new ClockSource(now); let eng = new SessionEngine({ settings, alerts }); eng.setSource(src);
   eng.configure({ mode: 'lt2', intervals: { warmupSec: 600, reps: 2, workSec: 120, restSec: 60, cooldownSec: 60 }, targets: null, meta: { speed: 10.5, incline: 1, warmup: W } }); eng.start(); clearInterval(eng.timer);
   check('LT2 start: warm-up 10 min at 7.5, 8.5 at 4 min, 9.5 at 7 min', spoken.some(t => /워밍업 10분. 시속 7.5. 4분에 8.5, 7분에 9.5/.test(t)), spoken.join(' | '));
   src.run(245, 130); check('4:00: "시속 8.5로"', spoken.some(t => /시속 8.5로/.test(t)));
   src.run(180, 135); check('7:00: "시속 9.5로"', spoken.some(t => /시속 9.5로/.test(t)));
-  src.run(180, 150); src.run(125, 160); check('after rep 1: the recovery jog speed is spoken', spoken.some(t => /회복. 시속 6.5에서 7.0/.test(t)), spoken.join(' | '));
+  src.run(180, 150); src.run(125, 160); check('after rep 1: the recovery jog speed is spoken (one speed, 6.5)', spoken.some(t => t === '회복. 시속 6.5.'), spoken.join(' | '));
   src.run(65, 140); src.run(125, 160); check('after the last rep: the cool-down speeds', spoken.some(t => /쿨다운 6분. 3분 시속 7.0, 3분 걷기 5.5/.test(t)), spoken.join(' | '));
   eng.stop('user');
   spoken.length = 0; src = new ClockSource(now); eng = new SessionEngine({ settings, alerts }); eng.setSource(src);
   eng.configure({ mode: 'verify', laps: { warmupSec: 300, lap1Sec: 600, lap2Sec: 1800, gapCapSec: 180, sampleAtSec: 30 }, targets: null, meta: { speed: 8.7, incline: 1, purpose: 'lt1', warmup: W } }); eng.start(); clearInterval(eng.timer);
-  check('two-lap start: 30 s walk at 5.5 then 7.0–7.5', spoken.some(t => /워밍업 5분. 30초 걷기 5.5, 그 다음 시속 7.0에서 7.5/.test(t)), spoken.join(' | '));
-  src.run(35, 110); check('0:30: "시속 7.0에서 7.5로"', spoken.some(t => /시속 7.0에서 7.5로/.test(t)));
+  check('two-lap start: 30 s walk at 5.5 then 7.0', spoken.some(t => t === '워밍업 5분. 30초 걷기 5.5, 그 다음 시속 7.0.'), spoken.join(' | '));
+  src.run(35, 110); check('0:30: "시속 7.0으로"', spoken.some(t => t === '시속 7.0으로.'), spoken.join(' | '));
   eng.stop('user');
   spoken.length = 0; src = new ClockSource(now); eng = new SessionEngine({ settings, alerts }); eng.setSource(src);
   eng.configure({ mode: 'verify', laps: { warmupSec: 300, lap1Sec: 600, lap2Sec: 1200, gapCapSec: 180, sampleAtSec: 30 }, targets: null, meta: { speed: 10.5, incline: 1, purpose: 'mlss', warmup: W } }); eng.start(); clearInterval(eng.timer);

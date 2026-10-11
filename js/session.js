@@ -22,6 +22,27 @@ export const DEFAULT_LAPS = { warmupSec: 300, lap1Sec: 600, lap2Sec: 1800, gapCa
 export const JUDGE_FROM_SEC = 600; // LT1 session: the heart-rate band is judged from minute 10 (no zone cues during the 0–5-min easy jog and the ramp)
 /** Minutes of an LT1 session after which the heart-rate ceiling is LT1 + 5 (drift allowed) rather than the band's upper edge. */
 export const LATE_FROM_SEC = 1200;
+export const LT1_WARMUP_SEC = 300; // LT1 session: the easy jog before the main speed (the "본 속도로" cue)
+/**
+ * The warm-up of a session as steps (v1.1.26): the speed to set from each moment of the warm-up on — one speed per step, the same
+ * numbers at the same seconds as the spoken cues (start() and the ramp cues of runPhases; test/test_warmup.mjs holds the two together).
+ * W = meta.warmup (prescribe.sessionSpeeds: { jog, hi, sub, ramp, walk, … }); warmupSec = the warm-up length of the LT2 / two-lap modes
+ * (the LT1 session's easy jog is LT1_WARMUP_SEC, the step test's comes from its protocol). Returns { totalSec, steps: [{ fromSec, speed,
+ * walk }] } — steps is empty when the numbers are not known or there is no warm-up.
+ */
+export function warmupSteps({ mode, W = null, purpose = 'lt1', warmupSec = 0, protocol = null } = {}) {
+  let totalSec = 0, steps = [];
+  if (mode === 'test') { totalSec = Number(protocol?.warmupSec) || 0; const sp = Number(protocol?.warmupSpeed); if (Number.isFinite(sp) && sp > 0) steps = [{ fromSec: 0, speed: sp.toFixed(1), walk: sp <= 6 }]; }
+  else if (mode === 'lt1') { totalSec = LT1_WARMUP_SEC; if (W) steps = [{ fromSec: 0, speed: W.jog }]; }
+  else if (mode === 'verify') { totalSec = Number(warmupSec) || 0; if (W) steps = purpose === 'mlss' ? [{ fromSec: 0, speed: W.hi }, { fromSec: 120, speed: W.sub }] : [{ fromSec: 0, speed: W.walk, walk: true }, { fromSec: 30, speed: W.jog }]; }
+  else if (mode === 'lt2') { totalSec = Number(warmupSec) || 0; if (W) steps = totalSec >= 540 ? [{ fromSec: 0, speed: W.hi }, { fromSec: totalSec - 360, speed: W.sub }, { fromSec: totalSec - 180, speed: W.ramp }] : [{ fromSec: 0, speed: W.hi }]; }
+  return stepPlan(totalSec, steps);
+}
+/** The LT2 ladder's cool-down as steps: its first half at the easy jog, its second half walking (what the cue at its start says). */
+export function cooldownSteps({ W = null, cooldownSec = 0 } = {}) { const totalSec = Number(cooldownSec) || 0; return stepPlan(totalSec, W ? [{ fromSec: 0, speed: W.jog }, { fromSec: totalSec / 2, speed: W.walk, walk: true }] : []); }
+const stepPlan = (totalSec, steps) => ({ totalSec, steps: steps.filter(s => s.speed != null && s.speed !== '' && s.fromSec < totalSec).map(s => ({ fromSec: s.fromSec, speed: String(s.speed), walk: !!s.walk })) });
+/** Where `el` seconds into a step plan stands: the step that applies and the one after it (null without steps). */
+export function stepAt(plan, el) { const st = plan?.steps || []; let i = -1; for (let k = 0; k < st.length; k++) if (el >= st[k].fromSec) i = k; return i < 0 ? null : { idx: i, step: st[i], next: st[i + 1] || null }; }
 
 /** Build the ordered stage list for a protocol within treadmill limits. */
 export function buildStages(protocol, treadmill = {}) {
@@ -113,7 +134,7 @@ export class SessionEngine {
     this.filter.reset(); this.events.push({ t: now, type: 'start', mode: this.mode });
     const W = this.meta?.warmup || null; // warm-up intensities (v1.1.25), from the app's zones
     if (this.mode === 'test') { if (this.protocol.warmupSec > 0) { this.setPhase('warmup', now); this.alerts?.speak(VOICE.test_warmup(Math.round(this.protocol.warmupSec / 60), this.protocol.warmupSpeed)); } else this.beginStage(0, now); }
-    else if (this.mode === 'lt2') { this.rep = 0; this.setPhase(this.intervals.warmupSec > 0 ? 'warmup' : 'work', now); if (this.phase === 'work') { this.rep = 1; this.alerts?.cue(VOICE.interval_work(1, this.intervals.reps), { beep: 'double' }); } else this.alerts?.speak(VOICE.lt2_warmup(Math.round(this.intervals.warmupSec / 60), W)); }
+    else if (this.mode === 'lt2') { this.rep = 0; this.setPhase(this.intervals.warmupSec > 0 ? 'warmup' : 'work', now); if (this.phase === 'work') { this.rep = 1; this.alerts?.cue(VOICE.interval_work(1, this.intervals.reps), { beep: 'double' }); } else this.alerts?.speak(VOICE.lt2_warmup(Math.round(this.intervals.warmupSec / 60), W, warmupSteps({ mode: 'lt2', W, warmupSec: this.intervals.warmupSec }).steps)); }
     else if (this.mode === 'verify') { this.rep = 0; if (this.laps.warmupSec > 0) { this.setPhase('warmup', now); this.alerts?.speak(VOICE.verify_warmup(W, this.meta?.purpose === 'mlss')); } else this.advanceLap(now, true); }
     else if (this.mode === 'lt1') { this.setPhase('work', now); this.alerts?.speak(VOICE.lt1_warmup(W)); }
     else this.setPhase('work', now);
@@ -220,7 +241,7 @@ export class SessionEngine {
       if (left <= 0 && Number.isFinite(dur)) this.advanceInterval(now, false);
     } else if (this.mode === 'verify') {
       const Lp = this.laps;
-      if (this.phase === 'warmup') { const left = Lp.warmupSec - el; const W = this.meta?.warmup; if (W) { const mlss = this.meta?.purpose === 'mlss'; if (!mlss && el >= 30 && !this.warned.wr) { this.warned.wr = 1; A?.speak(VOICE.lt2_ramp(`${W.lo}에서 ${W.hi}`)); } if (mlss && el >= 120 && !this.warned.wr) { this.warned.wr = 1; A?.speak(VOICE.lt2_ramp(W.sub)); } } if (left <= 10 && !this.warned.w10) { this.warned.w10 = 1; A?.speak(VOICE.lap_warn_start(10)); } if (left <= 0) this.advanceLap(now, false); }
+      if (this.phase === 'warmup') { const left = Lp.warmupSec - el; const W = this.meta?.warmup; if (W) { const mlss = this.meta?.purpose === 'mlss'; if (!mlss && el >= 30 && !this.warned.wr) { this.warned.wr = 1; A?.speak(VOICE.lt2_ramp(W.jog)); } if (mlss && el >= 120 && !this.warned.wr) { this.warned.wr = 1; A?.speak(VOICE.lt2_ramp(W.sub)); } } if (left <= 10 && !this.warned.w10) { this.warned.w10 = 1; A?.speak(VOICE.lap_warn_start(10)); } if (left <= 0) this.advanceLap(now, false); }
       else if (this.phase === 'work') {
         const dur = this.rep === 1 ? Lp.lap1Sec : Lp.lap2Sec; const left = dur - el;
         if (this.rep === 2 && Math.abs(left - dur / 2) < 1 && !this.warned.half) { this.warned.half = 1; A?.speak(VOICE.halfway()); }
@@ -234,7 +255,7 @@ export class SessionEngine {
       }
     } else if (this.mode === 'lt1' && this.targets?.durationSec) {
       const left = this.targets.durationSec - el; const W = this.meta?.warmup;
-      if (el >= 300 && !this.warned.main) { this.warned.main = 1; A?.speak(VOICE.lt1_main(W)); }
+      if (el >= LT1_WARMUP_SEC && !this.warned.main) { this.warned.main = 1; A?.speak(VOICE.lt1_main(Number.isFinite(this.meta?.speed) ? (Math.round(this.meta.speed * 10) / 10).toFixed(1) : W?.easy)); } // one speed (v1.1.26): the session's own, else the easy speed
       if (el >= (this.targets.judgeFromSec ?? JUDGE_FROM_SEC) && !this.warned.judge) { this.warned.judge = 1; A?.speak(VOICE.lt1_judge()); }
       if (Math.abs(left - this.targets.durationSec / 2) < 1 && !this.warned.half) { this.warned.half = 1; A?.speak(VOICE.halfway()); }
       if (left <= 60 && !this.warned.m1) { this.warned.m1 = 1; A?.speak(VOICE.minute_left()); }
