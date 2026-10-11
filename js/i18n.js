@@ -54,7 +54,7 @@ export function t(key, vars) {
   return `<span class="ko">${ko}</span><span class="en">${en}</span>`;
 }
 /** Plain text (first language). */
-export function tx(key, vars) { const s = S[key]; if (!s) return key; return fmtTemplate(langMode === 'en' ? s.en : s.ko, vars); }
+export function tx(key, vars) { const s = S[key]; if (!s) return key; return fmtTemplate(langMode === 'en' || langMode === 'enfirst' ? s.en : s.ko, vars); } // enfirst (v1.1.28): English on top, Korean under it — single-language strings in English
 
 // Korean voice prompts (spoken) — kept short for a treadmill.
 /** "…로" after a number as it is read: 영·삼·육 end in a consonant → 으로, the other digits → 로 ("7.0으로", "8.5로"). */

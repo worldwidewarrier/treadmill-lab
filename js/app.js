@@ -11,7 +11,7 @@ import { importFile } from './importers.js';
 import { liveChart, timelineChart, stepTestChart, trendChart } from './charts.js';
 
 // ---------- defaults ----------
-export const APP_VERSION = '1.1.27'; // keep in sync with sw.js VERSION
+export const APP_VERSION = '1.1.28'; // keep in sync with sw.js VERSION
 const DEFAULTS = {
   profile: { birth: '1997-07-21', restHr: 52, restLactate: 0.8, restLactateAt: '2026-10-09', maxHr: 188, maxHrMode: 'tanaka', lang: 'both', theme: 'system' }, // restLactateAt: when the baseline was measured (a monthly reminder to re-measure)
   treadmill: { model: 'LTSXL', minSpeed: 0.8, maxSpeed: 18, speedStep: 0.1, maxIncline: 15, inclineStep: 0.5 },
@@ -83,7 +83,7 @@ function warmupNums(z) { const sp = sessionSpeeds(z); return sp ? { ...sp, z1: M
 function warmupMeta(z) { return sessionSpeeds(z); }
 // ---- the speed to set, on the screen (v1.1.26): one step plan per phase (session.warmupSteps / cooldownSteps — the numbers and moments of the spoken cues), shown as a line before the run and as the large banner during it ----
 /** An ad-hoc string in the first display language (what tx does for the strings of S). */
-const lx = (ko, en) => (getLang() === 'en' ? en : ko);
+const lx = (ko, en) => (getLang() === 'en' || getLang() === 'enfirst' ? en : ko);
 /** A step plan as text — "걷기 5.5 → 7.0(0:30) km/h": each later step with the moment it starts. '' without steps. */
 function warmupText(plan) { return plan && plan.steps.length ? plan.steps.map((s, i) => `${s.walk ? lx('걷기 ', 'walk ') : ''}${s.speed}${i ? `(${fmtClock(s.fromSec)})` : ''}`).join(' → ') + ' km/h' : ''; }
 /** The warm-up line of the Home card, the Plan tab and the setup cards as [head, speeds] — ["워밍업 5분", "7.0 km/h"]; null when there is no warm-up or its speeds are not known. */
@@ -154,8 +154,47 @@ function planCtx(withOffset = false) { const p = A.settings.plan; return planCon
 function planWeek() { return planCtx().ladderWeek; }
 function planArgs(z, ins, all, bf, withOffset = false) { const c = planCtx(withOffset); return { zones: z, week: c.ladderWeek, blockWeek: c.blockWeek, longWeek: c.longWeek, kinds: c.kinds, notes: c.notes, weekdayMin: A.settings.plan.weekdayMin, weekendMin: A.settings.plan.weekendMin, goal: A.settings.plan.goal, lt1Adjust: ins.lt1Adjust, longestMin: longestRecentMin(all), verifySpeed: bf.nextSpeed }; }
 const weekTag = (c, plan) => `${t('week')} ${c.blockWeek} (${c.monday})${plan.kinds.includes('mlss') ? ' · MLSS 검증 주 / MLSS-check week' : plan.kinds.includes('blood') ? ' · 혈액검사 주 / blood-test week' : plan.kinds.includes('easy') ? ' · 쉬운 주 / easy week' : ''}${plan.recovery ? ' · 회복주 / recovery' : ''}${plan.kinds.includes('step') ? ' · 계단 테스트 주 / step-test week' : ''}`;
+/**
+ * Language "English + 한국어" (v1.1.28, owner: swap the order of English and Korean, "with the least risk of malfunction"): a
+ * display-only pass over what is already drawn — nothing about how screens are built changes, and the other three language settings
+ * are untouched. Every Korean / English pair (a span.ko + span.en, or Korean text followed by span.en) is swapped in place: the English
+ * part takes the class `ko` (shown as the main line) and moves in front, the Korean part takes the class `en` (the small grey line), so
+ * the existing styles lay both out as before with the languages exchanged. Only text and plain inline elements are ever moved — never
+ * a field, a button or anything with an id. A MutationObserver does the same for whatever is drawn later (repaints, the live screen,
+ * dialogs, toasts); every swapped node is marked, so the observer never swaps twice and never loops.
+ */
+const INLINE_TAGS = new Set(['B', 'I', 'EM', 'STRONG', 'SMALL', 'CODE', 'SUP', 'SUB', 'SPAN', 'U', 'MARK']);
+function swapPair(en) {
+  if (!en.isConnected || en.dataset.sw || !en.parentNode) return;
+  en.dataset.sw = '1'; const parent = en.parentNode; const prev = en.previousSibling; let ko = null;
+  if (prev && prev.nodeType === 1 && prev.classList.contains('ko') && !prev.dataset.sw) ko = prev;
+  else {
+    const run = []; let n = prev;
+    while (n) {
+      if (n.nodeType === 3) { run.unshift(n); n = n.previousSibling; continue; }
+      if (n.nodeType === 1 && INLINE_TAGS.has(n.tagName) && !n.id && !n.classList.contains('en') && !n.classList.contains('ko') && !n.dataset.sw && !n.querySelector('input,select,button,textarea,[id],[data-action]')) { run.unshift(n); n = n.previousSibling; continue; }
+      break;
+    }
+    if (!run.some(x => /[가-힣]/.test(x.textContent))) return; // nothing Korean right before it: leave it as it is
+    ko = document.createElement('span'); parent.insertBefore(ko, run[0]); for (const x of run) ko.appendChild(x);
+  }
+  ko.dataset.sw = '1'; ko.classList.remove('ko'); ko.classList.add('en'); en.classList.remove('en'); en.classList.add('ko');
+  parent.insertBefore(en, ko);
+}
+const swapIn = root => { if (root.nodeType !== 1) return; if (root.matches('.en:not([data-sw])')) swapPair(root); root.querySelectorAll('.en:not([data-sw])').forEach(swapPair); };
+let langObserver = null;
+function applyLang() {
+  const on = A.settings.profile.lang === 'enfirst'; document.documentElement.classList.toggle('lang-enfirst', on);
+  if (on && !langObserver) { langObserver = new MutationObserver(ms => { for (const m of ms) for (const n of m.addedNodes) swapIn(n); }); langObserver.observe(document.body, { childList: true, subtree: true }); swapIn(document.body); }
+  else if (!on && langObserver) { langObserver.disconnect(); langObserver = null; unswapAll(); }
+}
+/** Back to Korean first without a reload (a session may be running): every swapped pair goes back to its order and classes (the screens repaint anyway; this is for what stays, the tab bar). */
+function unswapAll() {
+  document.querySelectorAll('.ko[data-sw]').forEach(en => { const ko = en.nextSibling; if (ko && ko.nodeType === 1 && ko.dataset.sw && ko.classList.contains('en')) { en.parentNode.insertBefore(ko, en); ko.classList.remove('en'); ko.classList.add('ko'); en.classList.remove('ko'); en.classList.add('en'); delete ko.dataset.sw; } delete en.dataset.sw; });
+  document.querySelectorAll('[data-sw]').forEach(n => { delete n.dataset.sw; });
+}
 function applyTheme() { const th = A.settings.profile.theme; if (th === 'system') document.documentElement.removeAttribute('data-theme'); else document.documentElement.setAttribute('data-theme', th); }
-async function saveSettings() { await store.saveSettings(A.settings); setLang(A.settings.profile.lang); applyTheme(); setRestBaseline(A.settings.profile.restLactate); setAlphaUse(A1()); }
+async function saveSettings() { await store.saveSettings(A.settings); setLang(A.settings.profile.lang); applyTheme(); applyLang(); setRestBaseline(A.settings.profile.restLactate); setAlphaUse(A1()); }
 /** The "lowest" of the two-lap rule: the lowest in-test lactate of the newest finished step test (real strap), else the resting baseline (prescribe.lactateFloor). */
 function refreshTestLowest() { const t = A.sessions.find(s => s.type === 'test' && s.final && s.sourceKind !== 'demo' && Number.isFinite(testLowest(s))); setTestLowest(t ? testLowest(t) : null); }
 function destroyCharts() { for (const c of A.charts) { try { c.destroy(); } catch (e) { /* ignore */ } } A.charts = []; }
@@ -714,7 +753,7 @@ async function renderPlan() {
   const todayIdx = new Date().getDay(); const isThisWeek = !(A.settings.plan.weekOffset || 0);
   let html = `<div class="row between"><h2 style="margin:0">${tx('weekly_plan')} · ${weekTag(pc, plan)}</h2><div class="row"><button class="compact ghost" data-action="week-prev">‹</button><button class="compact ghost" data-action="week-next">›</button></div></div>
     <p class="small muted" style="margin:4px 0 0">아침 = 달리기(평일 05:30 · 주말 09:00) · 점심 = 다른 운동 20분(11:30–11:50, 운동 뒤 식사) · 저녁 17:30 = 추가 운동(야근 없을 때만) · 사다리 ${plan.week}주째${plan.notes.length ? ' · ' + esc(plan.notes.join(' · ')) : ''}<span class="en">mornings = runs (05:30 weekdays, 09:00 weekends) · noon = other exercise 20 min (11:30–11:50, eat after) · 17:30 = extra exercise only without overtime · ladder week ${plan.week}${plan.notes.length ? ' · ' + esc(plan.notes.join(' · ')) : ''}</span></p>
-    <div class="card" style="margin-top:10px">${[1, 2, 3, 4, 5, 6, 0].map(d => plan.days.find(x => x.day === d)).map(d => `<div class="plan-day"><div class="dow ${isThisWeek && d.day === todayIdx ? 'today' : ''}">${DOW.ko[d.day]}<br><span class="small">${DOW.en[d.day]}</span></div><div>${descBlock(`plan-${pc.monday || ''}-${d.day}`, `<div class="type-${d.type}"><b>${esc(d.ko)}</b><span class="en">${esc(d.en)}</span></div><div class="small muted mono">${d.hr ? `${d.hr.hrLo}–${d.hr.hrHi} bpm` : ''}${Array.isArray(d.speed) ? ` · ${d.speed[0].toFixed(1)}${d.speed[1] !== d.speed[0] ? `–${d.speed[1].toFixed(1)}` : ''} km/h` : Number.isFinite(d.speed) ? ` · ${d.speed.toFixed(1)} km/h` : ''}${d.structure ? ` · ${esc(d.structure.label.split(' / ')[0])}` : ''}</div>${(w => (w ? `<div class="small muted mono wu-line">${esc(w)}</div>` : ''))(dayWarmup(d, z))}`, `${d.note ? `<div class="small muted">${esc(d.note.ko)}<span class="en">${esc(d.note.en)}</span></div>` : ''}${d.evening ? `<div class="small eve">점심·저녁${esc(d.evening.ko)}<span class="en">noon · evening ${esc(d.evening.en)}</span></div>` : ''}`)}</div><div class="mins">${d.minutes ? `${d.minutes}′` : '–'}</div></div>`).join('')}
+    <div class="card" style="margin-top:10px">${[1, 2, 3, 4, 5, 6, 0].map(d => plan.days.find(x => x.day === d)).map(d => `<div class="plan-day"><div class="dow ${isThisWeek && d.day === todayIdx ? 'today' : ''}">${DOW.ko[d.day]}<br><span class="small">${DOW.en[d.day]}</span></div><div>${descBlock(`plan-${pc.monday || ''}-${d.day}`, `<div class="type-${d.type}"><b>${esc(d.ko)}</b><span class="en">${esc(d.en)}</span></div><div class="small muted mono">${d.hr ? `${d.hr.hrLo}–${d.hr.hrHi} bpm` : ''}${Array.isArray(d.speed) ? ` · ${d.speed[0].toFixed(1)}${d.speed[1] !== d.speed[0] ? `–${d.speed[1].toFixed(1)}` : ''} km/h` : Number.isFinite(d.speed) ? ` · ${d.speed.toFixed(1)} km/h` : ''}${d.structure ? ` · ${esc((p => lx(p[0], p[1] || p[0]))(d.structure.label.split(' / ')))}` : ''}</div>${(w => (w ? `<div class="small muted mono wu-line">${esc(w)}</div>` : ''))(dayWarmup(d, z))}`, `${d.note ? `<div class="small muted">${esc(d.note.ko)}<span class="en">${esc(d.note.en)}</span></div>` : ''}${d.evening ? `<div class="small eve">점심·저녁${esc(d.evening.ko)}<span class="en">noon · evening ${esc(d.evening.en)}</span></div>` : ''}`)}</div><div class="mins">${d.minutes ? `${d.minutes}′` : '–'}</div></div>`).join('')}
       <p class="small muted" style="margin-top:8px">달리기 총 ${plan.totalMin}분 · 고강도 ${plan.hardPct}% · 롱런은 70분에서 매주 +10분, 100분까지(30일 최장 런 × 1.1 상한, 회복주 × 0.7) · 사다리 4주째·8주째는 회복주 · 화 = 유일한 고강도(MLSS 속도) · 목 = 주간 LT1 검증(두 랩) · 쉬운 런은 속도가 용량, 심박은 천장 / Running ${plan.totalMin} min · hard ${plan.hardPct}% · long run from 70 min, +10 a week up to 100 (capped at 110 % of the 30-day longest, × 0.7 in a recovery week) · ladder weeks 4 and 8 are recovery · Tuesday = the one hard day (at MLSS speed) · Thursday = the weekly LT1 check (two laps) · easy runs: speed is the dose, heart rate the ceiling</p>
       <details style="margin-top:8px"><summary class="small">왜 이렇게 짰나 (10/10 평가) <span class="en">Why the week looks like this (the Oct 10 review)</span></summary><ul class="small" style="padding-left:18px;margin:8px 0 0;line-height:1.5">${PLAN_WHY.map(w => `<li>${esc(w.ko)}<span class="en">${esc(w.en)}</span></li>`).join('')}</ul></details>
       <p class="small" style="margin-top:6px"><span class="ko">${esc(bf.ko)}</span><span class="en">${esc(bf.en)}</span></p>${bf.change ? `<button class="primary block" style="margin-top:8px" data-action="apply-band">범위 반영: ${esc(bf.change.ko)} <span class="en">Apply the band change</span></button>` : ''}
@@ -737,7 +776,7 @@ function renderSettings() {
       <div class="grid2">${num('profile.restLactate', '안정 시 젖산 mmol/L / Resting lactate', 'min="0.3" max="4" step="0.1"')}<label class="field">측정일 / measured on<input type="date" data-set="profile.restLactateAt" value="${esc(s.profile.restLactateAt || '')}"></label></div>
       <p class="small muted" style="margin:0">아침 공복·채혈 규칙대로 잰 값. 계단 검사가 없을 때 두 랩 검증의 기준선(안정 시 + 0.5)과 단일 런 LT1 판정(종료 ≤ 안정 시 + 1.0)에 씁니다. 값을 바꾸면 측정일이 오늘로 바뀝니다. 30일이 지나면 홈에 재측정 안내가 뜹니다(검증 달리기 날에는 안정 시 채혈 불필요).<span class="en">Measured fasted, by the sampling rules. The line of the two-lap check (rest + 0.5) when there is no step test, and the single-run LT1 rule (end ≤ rest + 1.0). Changing the value sets the date to today; after 30 days Home reminds you to re-measure (a check day needs no resting sample).</span></p>
       <div class="grid2">${sel('profile.maxHrMode', t('max_hr'), [['tanaka', tx('max_hr_tanaka') + (age != null ? ` = ${Math.round(208 - 0.7 * age)}` : '')], ['manual', '직접 입력 / manual']])}${num('profile.maxHr', 'bpm (manual)', 'min="120" max="230"')}</div>
-      <div class="grid2">${sel('profile.lang', t('lang'), [['both', '한국어 + English'], ['ko', '한국어'], ['en', 'English']])}${sel('profile.theme', '테마 / Theme', [['system', '시스템 / System'], ['dark', '다크 / Dark'], ['light', '라이트 / Light']])}</div></div>
+      <div class="grid2">${sel('profile.lang', t('lang'), [['both', '한국어 + English'], ['enfirst', 'English + 한국어'], ['ko', '한국어'], ['en', 'English']])}${sel('profile.theme', '테마 / Theme', [['system', '시스템 / System'], ['dark', '다크 / Dark'], ['light', '라이트 / Light']])}</div></div>
     <h2>${t('treadmill')}</h2><div class="card stack"><label class="field">모델 / Model<input type="text" data-set="treadmill.model" value="${esc(s.treadmill.model)}"></label>
       <div class="grid3">${num('treadmill.maxSpeed', '최대 km/h', 'step="0.5"')}${num('treadmill.speedStep', '속도 단위 / step', 'step="0.1"')}${num('treadmill.maxIncline', '최대 경사 %', 'step="0.5"')}</div></div>
     <h2>${t('protocol')}</h2><div class="card stack">
@@ -862,7 +901,7 @@ async function runMigrations() {
 // ---------- init ----------
 (async function init() {
   const saved = await store.getSettings(); A.settings = coerceSettings(deepMerge(freshDefaults(), saved || {})); setRestBaseline(A.settings.profile.restLactate); setAlphaUse(A1());
-  setLang(A.settings.profile.lang); applyTheme();
+  setLang(A.settings.profile.lang); applyTheme(); applyLang();
   await refreshLists();
   try { await runMigrations(); } catch (e) { console.error('migrations', e); } // (one-time data fixes of v1.1.17; a failure must not stop the app)
   try { A.bandFinder = bandFinder(await store.listSessions(), A.settings.zones); } catch (e) { console.error('band finder', e); } // (the Session tab's test speed, before Home has been shown)
