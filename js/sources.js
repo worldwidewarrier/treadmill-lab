@@ -10,6 +10,16 @@ class BaseSource {
   async disconnect() { clearInterval(this._timer); this._timer = null; this.setStatus('disconnected'); }
 }
 
+/**
+ * No strap (v1.1.32): a real run with lactate only. Nothing is measured — the session runs on the wall clock with its phases, laps,
+ * voice cues and lactate entries; heart rate, RR and α1 stay empty (shown as –), so no zone is judged and nothing is made up.
+ */
+export class NoStrapSource extends BaseSource {
+  constructor() { super(); this.kind = 'nostrap'; this.name = 'No strap'; }
+  now() { return Date.now(); }
+  async connect() { this.setStatus('connected', 'lactate only'); }
+}
+
 /** Replays [[tMs, rrMs], ...] as one HR notification per second of data time. */
 export class ReplaySource extends BaseSource {
   constructor(rr, { speed = 1, name = 'Replay' } = {}) {

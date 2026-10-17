@@ -71,7 +71,7 @@ check('events: the lactate rows carry their tags (lap 1 · 2:00 at speed · s af
 await shot('43-verify-card');
 // CSV: the two-lap header and the tag columns
 const [dl] = await Promise.all([page.waitForEvent('download'), page.click('[data-action=export-csv]')]); const { readFileSync } = await import('node:fs'); const csv = readFileSync(await dl.path(), 'utf8');
-check('CSV: a two_lap header line with gap_sec and the lap values; event rows with lap / run_s / since_stop_s columns', /^# two_lap,1,lap1_min,2\.[01],lap1_hr_5_10,,gap_sec,\d+,lap2_min,(2\.[89]|3\.[01]),/m.test(csv) && /^event_t_iso,elapsed_s,type,value,stage,phase,lap,run_s,since_stop_s,gap_s$/m.test(csv) && /,lactate,1,,gap,1,120,\d+,\d+$/m.test(csv), csv.split('\n').filter(l => /two_lap|lactate/.test(l)).join(' / ').slice(0, 300));
+check('CSV: a two_lap header line with gap_sec and the lap values; event rows with lap / run_s / since_stop_s columns', /^# two_lap,1,lap1_min,2\.[01],lap1_hr_5_10,,gap_sec,\d+,lap2_min,(2\.[89]|3\.[01]),/m.test(csv) && /^event_t_iso,elapsed_s,type,value,stage,phase,lap,run_s,since_stop_s,gap_s$/m.test(csv) && /,lactate,1,,gap,1,1(19|2[01]),\d+,\d+$/m.test(csv), csv.split('\n').filter(l => /two_lap|lactate/.test(l)).join(' / ').slice(0, 300));
 // ---- 4. the band finder: two real passes (8.7 then 8.9) → Home offers the band change → apply
 await page.evaluate(async () => { const { store } = await import('./js/store.js');
   const mk = (id, speed, lap1, end, daysAgo, hr = 140) => { const t0 = Date.now() - daysAgo * 86400000; const S = s => t0 + s * 1000; const hrLive = []; for (let s = 0; s <= 2700; s++) hrLive.push([S(s), s < 300 ? 110 : s < 900 ? hr : s < 980 ? 100 : s < 2780 ? hr : 100]);

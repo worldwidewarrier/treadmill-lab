@@ -207,6 +207,17 @@ export const PLAN_WHY = [
 ];
 
 /** Per-session metrics used by insights and summaries. */
+/**
+ * A session recorded on the demo (virtual) strap that was really run without a strap (v1.1.32, owner: "스트랩 미휴대로 젖산만 측정"):
+ * the clock, phases, laps, speed and lactate are real; the heart rate, RR and α1 were made up by the demo and are dropped. From then
+ * on it counts like a real session (verdict, band finder, curve, longest run) with lactate only — a heart-rate figure is never taken from it.
+ */
+export function asLactateOnly(session) {
+  const s = { ...session, sourceKind: 'nostrap', convertedFrom: session.sourceKind || 'demo', hrLive: [], rr: [], tiz: { totalSec: 0, inSec: 0 } };
+  s.features = list(session.features).map(f => ({ t: f.t, stage: f.stage, phase: f.phase, rep: f.rep, paused: f.paused, hr: NaN, alpha1: NaN, rmssd: NaN, hrInst: null, artifactPct: 0, samples: 0 }));
+  delete s.smo2Live; s.metrics = sessionMetrics(s); return s;
+}
+export const NO_HR_KINDS = ['nostrap'];
 export function sessionMetrics(session) {
   // A Free / LT1 run in which something logged marks a stop (a lactate entry, Pause, the run end typed in the card) is measured up to
   // where the running ended and without the stops inside it. Every other session: the whole recording, as it always was.
@@ -272,7 +283,7 @@ export function sessionSummaryText(session, metrics, zones, analysis = null) {
     if (analysis?.hrv && !analysis.hrv.hrvt1) { ko.push('α1이 0.75 아래로 내려오지 않았습니다 (아티팩트 또는 강도 부족).'); en.push('α1 never dropped below 0.75 (artifacts or insufficient intensity).'); }
   } else {
     const ty = String(session.type || '').toUpperCase(); const tyKo = session.type === 'verify' ? 'LT1 검증(두 랩)' : ty, tyEn = session.type === 'verify' ? 'LT1 check (two laps)' : ty;
-    ko.push(`${tyKo} 세션 ${d}분, 평균 심박 ${Math.round(metrics.meanHr)} bpm.`); en.push(`${tyEn} session ${d} min, mean HR ${Math.round(metrics.meanHr)} bpm.`);
+    if (Number.isFinite(metrics.meanHr)) { ko.push(`${tyKo} 세션 ${d}분, 평균 심박 ${Math.round(metrics.meanHr)} bpm.`); en.push(`${tyEn} session ${d} min, mean HR ${Math.round(metrics.meanHr)} bpm.`); } else { ko.push(`${tyKo} 세션 ${d}분, 심박 기록 없음.`); en.push(`${tyEn} session ${d} min, no heart rate recorded.`); }
     if (Number.isFinite(metrics.timeInZonePct)) { ko.push(`존 체류 ${Math.round(metrics.timeInZonePct)}%.`); en.push(`Time in zone ${Math.round(metrics.timeInZonePct)}%.`); }
     if (alphaOn() && Number.isFinite(metrics.meanAlpha1)) {
       ko.push(`평균 α1 ${metrics.meanAlpha1.toFixed(2)} (0.75 이상 ${Math.round(metrics.pctAlphaAbove75)}%).`); en.push(`Mean α1 ${metrics.meanAlpha1.toFixed(2)} (≥0.75 for ${Math.round(metrics.pctAlphaAbove75)}%).`);
@@ -448,6 +459,11 @@ export function lactateVerdict(session) {
  * durability: the level passed (lap 1 ≤ line) but the 30 min did not hold (rise > 0.5, or lap-2 drift > 8 bpm) — a duration problem, not a speed one.
  * No zone change follows from one run: the band finder moves the band after two consecutive results (bandFinder).
  */
+/** No strap: the verdict's heart-rate advice ("target HR −2 / −4 bpm") has nothing to stand on — dropped, and said so. */
+function noHrText(session, vd) {
+  if (!vd || !NO_HR_KINDS.includes(session.sourceKind)) return vd;
+  return { ...vd, adjust: null, noHr: true, ko: vd.ko.replace(/, 목표 심박 −\d bpm/, '') + ' (스트랩 없음 — 젖산만으로 판정, 심박 조정 없음)', en: vd.en.replace(/, target HR −\d bpm/, '') + ' (no strap — judged on lactate only, no heart-rate change)' };
+}
 function twoLapVerdict(session, c, tl) {
   const sp = session.speed; const spTxt = Number.isFinite(sp) ? ` @ ${sp} km/h` : '';
   const fl = lactateFloor(); const lowest = fl ? r1(fl.lowest) : 0.8; const line = r1(lowest + LINE_DELTA);
@@ -528,7 +544,7 @@ function verdictCore(session, c, isMlss) {
   const riseKo = rise != null ? ` (${fromBase ? `기준 안정 시 ${restUsed} 대비` : '안정 시'} ${rise >= 0 ? '+' : ''}${rise.toFixed(1)})` : '', riseEn = rise != null ? ` (${rise >= 0 ? '+' : ''}${rise.toFixed(1)} over ${fromBase ? `the resting baseline ${restUsed}` : 'rest'})` : '';
   const tl = session.type === 'test' ? null : runTimeline(session); const bouts = tl ? tl.bouts : 1;
   if (bouts === 0) return { level: 'near', adjust: null, intervals: true, ko: `워밍업 중에 끝난 세션입니다 — 젖산 ${c.end}은 기록만 하고 판정하지 않습니다.`, en: `The session ended in the warm-up — lactate ${c.end} is kept on record, no verdict.` };
-  if (tl && tl.twoLap && !isMlss) return twoLapVerdict(session, c, tl);
+  if (tl && tl.twoLap && !isMlss) return noHrText(session, twoLapVerdict(session, c, tl));
   if (bouts > 1) return intervalVerdict(c, spTxt, delta);
   if (isMlss) {
     if (delta != null) {
