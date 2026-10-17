@@ -144,7 +144,7 @@ const r5 = x => Math.round(x / 5) * 5;
  * `week` = the ladder week (lt2Structure / isRecoveryWeek), `blockWeek` = weeks since the block start, `longWeek` = long-run weeks so far (the long run grows with it; default blockWeek), `kinds`/`notes` = this
  * week's calendar entries (planContext). weekdayMin only shortens the easy days when it is below 55; weekendMin caps the long run.
  */
-export function weeklyPlan({ zones, week = 1, blockWeek = week, longWeek = blockWeek, weekdayMin = 60, weekendMin = 150, goal = 'base', lt1Adjust = 0, longestMin = null, verifySpeed = null, kinds = [], notes = [] }) {
+export function weeklyPlan({ zones, week = 1, blockWeek = week, longWeek = blockWeek, weekdayMin = 60, weekendMin = 150, goal = 'base', lt1Adjust = 0, longestMin = null, verifySpeed = null, verifyDue = true, verifyNext = null, kinds = [], notes = [] }) {
   const K = kinds || []; const rec = isRecoveryWeek(week) || K.includes('recovery'); const k = rec ? 0.7 : 1; const lightWeek = rec || K.includes('easy') || K.includes('blood');
   const T1 = sessionTargets(zones, 'lt1', { lt1Adjust }); const T2 = sessionTargets(zones, 'lt2');
   const steady = T1 ? { hrLo: T1.hrLo, hrHi: T1.hrHi } : null; // every easy run = the LT1 session band (LT1 −10…−3 at minute 10; the ceiling LT1 + 5 after 20 min is the session's)
@@ -175,7 +175,9 @@ export function weeklyPlan({ zones, week = 1, blockWeek = week, longWeek = block
   if (K.includes('mlss')) tue = { day: 2, type: 'verify', purpose: 'mlss', ko: 'MLSS 검증 30분 (두 랩 MLSS 변형)', en: 'MLSS check 30 min (two-lap MLSS variant)', minutes: 37, hr: T2, speed: lt2Sp, note: { ko: `공복 · 워밍업 5분 = 2분 ${wu ? wu.hi : '–'} → 3분 ${lt1Speed != null ? f1(lt1Speed - 0.2) : '–'} km/h → 랩 1 10분 @ LT2 속도${lt2Sp != null ? ` ${f1(lt2Sp)} km/h` : ''}(심박 ${T2 ? `${T2.hrLo}–${T2.hrHi}` : '–'}) → 정지 ≤ 45초(30–45초에 채혈) → 랩 2 20분 → 종료 채혈 → 걷기 5분 5.5 · 상승 ≤ 0.5 → 다음 +0.3 · 0.5–1.0 → 그 속도가 MLSS, 유지 · > 1.0 → −0.4 · 정지 > 3분이면 상향 없음 · 사다리와 같은 조건: 워밍업 중 덱스트로스 30 g + 물 500 mL · 스트립 2 + 여분 1`, en: `fasted · warm-up 5 min = 2 min at ${wu ? wu.hi : '–'} → 3 min at ${lt1Speed != null ? f1(lt1Speed - 0.2) : '–'} km/h → lap 1 10 min at the LT2 speed${lt2Sp != null ? ` ${f1(lt2Sp)} km/h` : ''} (HR ${T2 ? `${T2.hrLo}–${T2.hrHi}` : '–'}) → stop ≤ 45 s (sample at 30–45 s) → lap 2 20 min → end sample → 5 min walk at 5.5 · rise ≤ 0.5 → +0.3 next time · 0.5–1.0 → that speed is the MLSS, hold · > 1.0 → −0.4 · a stop over 3 min → no raise · same conditions as the ladder: dextrose 30 g + 500 mL water during the warm-up · 2 strips + 1 spare` } };
   else if (lightWeek || !st) tue = { day: 2, type: 'lt1', ko: `쉬운 런 45분${rec ? ' (회복주)' : ''}`, en: `Easy run 45 min${rec ? ' (recovery week)' : ''}`, minutes: 45, hr: steady, speed: easySp, note: { ko: `${noteTxt || (rec ? '사다리 4주째·8주째는 회복주 — 고강도 없음' : '이번 주는 고강도 없음')} · 0–5분 ${wu ? wu.lo : '–'} km/h → 본 구간${bandTxt} → 마지막 3분 걷기 5.5 · 심박 10분부터 ${steady ? `${steady.hrLo}–${steady.hrHi}` : '–'}, 30초 넘으면 −0.3 · 스트라이드 없음`, en: `${noteTxt || (rec ? 'ladder weeks 4 and 8 are recovery weeks — no hard session' : 'no hard session this week')} · 0–5 min at ${wu ? wu.lo : '–'} km/h → main part${bandTxt} → last 3 min walk 5.5 · HR ${steady ? `${steady.hrLo}–${steady.hrHi}` : '–'} from minute 10, 30 s above → −0.3 · no strides` } };
   else tue = { day: 2, type: 'lt2', ko: `LT2 사다리 ${st.label.split(' / ')[0]}`, en: `LT2 ladder ${st.label.split(' / ')[1]}`, minutes: Math.round((st.warmupSec + st.reps * st.workSec + (st.reps - 1) * st.restSec + st.cooldownSec) / 60), hr: T2, structure: st, speed: lt2Sp, note: { ko: `워밍업 10분 = 4분 ${wu ? wu.hi : '–'} → 3분 ${lt1Speed != null ? f1(lt1Speed - 0.2) : '–'} → 3분 ${lt2Sp != null ? f1(lt2Sp - 1.0) : '–'} km/h → 구간 ${st.reps}×${st.workSec / 60}분 @ ${lt2Sp != null ? f1(lt2Sp) : '–'} km/h(MLSS 속도), 심박 ${T2 ? `${T2.hrLo}–${T2.hrHi}` : '–'} · 구간 4분 이후 천장 ${T2 ? T2.hrHi : '–'}을 60초 넘으면 다음 구간 −0.3 · 회복 ${st.restSec / 60}분 조깅 ${lt1Speed != null ? f1(lt1Speed - 2.2) : '–'} km/h, 끝에 심박 < ${steady ? steady.hrHi : '–'}가 아니면 다음 구간 −0.3 · 쿨다운 6분 = 3분 ${wu ? wu.lo : '–'} → 3분 걷기 5.5 · 사다리 2·6주째에 마지막 구간 뒤 채혈: 3.0–4.5 적정, < 3.0 → +0.3, > 4.5 → −0.3, 1구간→마지막 상승 > 1.0 → −0.3`, en: `warm-up 10 min = 4 min at ${wu ? wu.hi : '–'} → 3 min at ${lt1Speed != null ? f1(lt1Speed - 0.2) : '–'} → 3 min at ${lt2Sp != null ? f1(lt2Sp - 1.0) : '–'} km/h → reps ${st.reps} × ${st.workSec / 60} min at ${lt2Sp != null ? f1(lt2Sp) : '–'} km/h (MLSS speed), HR ${T2 ? `${T2.hrLo}–${T2.hrHi}` : '–'} · from minute 4 of a rep, 60 s above ${T2 ? T2.hrHi : '–'} → next rep −0.3 · recovery ${st.restSec / 60} min jog at ${lt1Speed != null ? f1(lt1Speed - 2.2) : '–'} km/h, HR not under ${steady ? steady.hrHi : '–'} at its end → next rep −0.3 · cool-down 6 min = 3 min at ${wu ? wu.lo : '–'} → 3 min walk at 5.5 · ladder weeks 2 and 6: a sample after the last rep — 3.0–4.5 on target, < 3.0 → +0.3, > 4.5 → −0.3, rise rep 1 → last > 1.0 → −0.3` } };
-  const thu = K.includes('blood')
+  const thu = !K.includes('blood') && !verifyDue
+    ? (x => verifyNext ? { ...x, note: { ko: `다음 LT1 검사: ${verifyNext} 주 목요일(범위 확인됨, 4주마다) · ${x.note.ko}`, en: `Next LT1 check: the Thursday of the week of ${verifyNext} (band settled, every 4 weeks) · ${x.note.en}` } } : x)(easyDay(4, easyMin, ' (LT1 검사 없는 주)', ' (no LT1 check this week)'))
+    : K.includes('blood')
     ? { day: 4, type: 'rest', ko: '달리기 0분 — 혈액검사 아침', en: 'No run (0 min) — blood-test morning', minutes: 0, hr: null, note: { ko: `전날 22:00부터 금식(물 가능) · 공복 채혈 뒤 아침 식사 · 이번 주 LT1 검증은 건너뛰고 다음 주 목요일에 같은 속도로`, en: `fasting from 22:00 the night before (water allowed) · breakfast after the draw · this week's LT1 check is skipped — next Thursday at the same speed` } }
     : { day: 4, type: 'verify', ko: `LT1 검증 달리기 (두 랩${vs != null ? `, ${vs.toFixed(1)} km/h` : ''})`, en: `LT1 verification run (two laps${vs != null ? `, ${vs.toFixed(1)} km/h` : ''})`, minutes: 45, hr: steady, speed: vs, note: { ko: `공복 · 같은 시각 ± 30분 · 워밍업 5분 = 0:30 걷기 5.5 → 4:30 ${wu ? wu.lo : '–'} km/h(5분에 심박 < ${z1Top ?? '–'}) → 랩 1 10분 @ 검사 속도 → 간격 60–90초(서서, 정지 30–45초 뒤 채혈, 상한 3분) → 랩 2 30분 → 종료 채혈 → 걷기 5분 5.5 · 스트립 2개(판정선 ± 0.2 안이면 3개) · ${GATE.ko} 쉬운 런 45분으로 바꾸고 다음 목요일 같은 속도`, en: `fasted · same clock time ± 30 min · warm-up 5 min = 0:30 walk at 5.5 → 4:30 at ${wu ? wu.lo : '–'} km/h (HR < ${z1Top ?? '–'} at 5:00) → lap 1 10 min at the test speed → gap 60–90 s (stand still, sample 30–45 s after the stop, cap 3 min) → lap 2 30 min → end sample → 5 min walk at 5.5 · 2 strips (a 3rd within ± 0.2 of the line) · ${GATE.en} run an easy 45 and repeat next Thursday at the same speed` } };
   const sat = K.includes('step')
@@ -495,11 +497,33 @@ function twoLapVerdict(session, c, tl) {
  * LT1 floor to the passed speed and lap-1 heart rate; two fails lower the cap to speed −0.3 / heart rate −4; borderline changes nothing.
  * → { nextSpeed, step, from: 'result' | 'zones', last: { date, speed, level }, streak: { level, n } | null, change: { zones, keys, ko, en } | null, ko, en }
  */
+/** Weeks between LT1 checks once the band has settled (v1.1.33). */
+export const MAINT_DAYS = 28;
+/**
+ * How often the two-lap check runs (v1.1.33, owner: "가장 좋은 방법으로 적용" — LT1 moves over weeks to months and one strip
+ * carries ± 0.2–0.3 mmol/L, so weekly checks near the line mostly measure noise). Weekly while the search is moving; once the last
+ * two checks at the same speed gave the same verdict, the band has settled → the next check is due 4 weeks after the last one.
+ * A later check that disagrees (e.g. a pass where there were borderlines) puts it back to weekly by itself.
+ * → { mode: 'weekly' | 'maintenance', due (ms, start of the due day), ko, en }
+ */
+export function checkCadence(results) {
+  const n = (results || []).length; const day = t => { const d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); };
+  if (n >= 2) { const a = results[n - 2], b = results[n - 1];
+    if (Math.abs(a.s.speed - b.s.speed) < 0.05 && a.vd.level === b.vd.level) {
+      const due = day(b.s.startedAt) + MAINT_DAYS * 86400000; const d = new Date(due); const md = `${d.getMonth() + 1}/${d.getDate()}`;
+      return { mode: 'maintenance', due, ko: `범위 확인됨(${b.s.speed} km/h에서 같은 결과 2회) → 검사는 4주마다, 다음 ${md} 주 목요일 · 그 사이 목요일은 쉬운 런. 오늘의 실시 체크 → 설정 → LT1 검사 주기에도 같은 날짜를.`, en: `Band settled (the same result twice at ${b.s.speed} km/h) → checks every 4 weeks, next in the week of ${md} · Thursdays in between are easy runs. Set the same date in the daily app (설정 → LT1 검사 주기).` }; } }
+  return { mode: 'weekly', due: null, ko: '범위가 정해질 때까지(같은 속도에서 같은 결과 2회) 매주 검사.', en: 'Weekly until the band settles (the same result twice at the same speed).' };
+}
+/** Is the two-lap check due in the week that starts on `monday` ('YYYY-MM-DD')? Weekly mode: always; maintenance: from the week holding `due` on. */
+export function checkDueInWeek(cadence, monday) {
+  if (!cadence || cadence.mode !== 'maintenance' || !Number.isFinite(cadence.due)) return true;
+  const [y, m, d] = String(monday).split('-').map(Number); const sun = new Date(y, m - 1, d + 6, 23, 59, 59).getTime(); return sun >= cadence.due;
+}
 export function bandFinder(sessions, zones, { days = 70, now = Date.now() } = {}) {
   const z = zones || {}; const zSpeed = Number.isFinite(z.lt1Speed) ? z.lt1Speed : null;
   const runs = (sessions || []).filter(s => s && s.type === 'verify' && s.final && s.sourceKind !== 'demo' && (s.purpose || 'lt1') === 'lt1' && Number.isFinite(s.speed) && now - s.startedAt <= days * 86400000).sort((a, b) => a.startedAt - b.startedAt);
   const results = []; for (const s of runs) { const vd = lactateVerdict(s); if (vd && vd.twoLap && vd.lap1 != null) results.push({ s, vd }); }
-  if (!results.length) return { nextSpeed: zSpeed, step: 0, from: 'zones', last: null, streak: null, change: null, results, ko: zSpeed != null ? `아직 두 랩 검증 결과가 없습니다 — 이번 주 검사 속도는 현재 LT1 속도 ${zSpeed.toFixed(1)} km/h.` : '아직 두 랩 검증 결과가 없습니다.', en: zSpeed != null ? `No two-lap result yet — this week's test speed is the current LT1 speed, ${zSpeed.toFixed(1)} km/h.` : 'No two-lap result yet.' };
+  if (!results.length) return { nextSpeed: zSpeed, step: 0, from: 'zones', last: null, streak: null, change: null, results, cadence: checkCadence([]), ko: zSpeed != null ? `아직 두 랩 검증 결과가 없습니다 — 이번 주 검사 속도는 현재 LT1 속도 ${zSpeed.toFixed(1)} km/h.` : '아직 두 랩 검증 결과가 없습니다.', en: zSpeed != null ? `No two-lap result yet — this week's test speed is the current LT1 speed, ${zSpeed.toFixed(1)} km/h.` : 'No two-lap result yet.' };
   const last = results[results.length - 1]; const step = last.vd.next || 0;
   const cap = Number.isFinite(z.testLt1Speed) ? r1(z.testLt1Speed + 0.3) : (zSpeed != null ? r1(zSpeed + 0.3) : null);
   let next = r1(last.s.speed + step); let capped = false; if (step > 0 && cap != null && next > cap) { next = Math.max(last.s.speed, cap); capped = true; }
@@ -518,7 +542,8 @@ export function bandFinder(sessions, zones, { days = 70, now = Date.now() } = {}
   const stepTxt = step > 0 ? `+${step.toFixed(1)}` : step < 0 ? step.toFixed(1) : '±0';
   const ko = `최근 검증(${dTxt}, ${last.s.speed} km/h): ${lv[0]} → 이번 주 검사 속도 ${next.toFixed(1)} km/h (${stepTxt}${capped ? ', 계단 검사 LT1 + 0.3 상한' : ''}).` + (n >= 2 ? ` ${lv[0]} ${n}주 연속${change ? ` → 범위 변경 가능: ${change.ko}` : ' — 현재 존과 모순 없음'}.` : ' 범위는 두 주 연속 같은 결과일 때만 바뀝니다.');
   const en = `Latest check (${dTxt}, ${last.s.speed} km/h): ${lv[1]} → this week's test speed ${next.toFixed(1)} km/h (${stepTxt}${capped ? ', capped at the step-test LT1 + 0.3' : ''}).` + (n >= 2 ? ` ${lv[1]} ${n} weeks running${change ? ` → band change available: ${change.en}` : ' — consistent with the current zones'}.` : ' The band moves only after two consecutive results of the same kind.');
-  return { nextSpeed: next, step, from: 'result', capped, last: { date: last.s.startedAt, speed: last.s.speed, level: last.vd.level, id: last.s.id }, streak, change, results, ko, en };
+  const cadence = checkCadence(results);
+  return { nextSpeed: next, step, from: 'result', capped, last: { date: last.s.startedAt, speed: last.s.speed, level: last.vd.level, id: last.s.id }, streak, change, results, cadence, ko: (cadence.mode === 'maintenance' ? ko.replace('이번 주 검사 속도', '다음 검사 속도') : ko) + ' ' + cadence.ko, en: (cadence.mode === 'maintenance' ? en.replace("this week's test speed", 'the next test speed') : en) + ' ' + cadence.en };
 }
 /**
  * Interval sessions (LT2 mode, more than one rep). The recoveries clear lactate, so the samples tell whether the reps were at the

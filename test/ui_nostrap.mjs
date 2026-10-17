@@ -13,7 +13,7 @@ const page = await ctx.newPage(); const errors = []; page.on('pageerror', e => e
 let fails = 0; const check = (n, c, d = '') => { console.log((c ? 'PASS ' : 'FAIL ') + n + (d ? '  ' + d : '')); if (!c) fails++; };
 const shot = n => page.screenshot({ path: `${SHOTS}/${n}.png`, fullPage: true });
 const text = () => page.evaluate(() => document.getElementById('view').textContent);
-const weekly = () => page.evaluate(() => { const h2 = [...document.querySelectorAll('#view h2')].find(h => /주간 LT1 검증/.test(h.textContent)); return h2 && h2.nextElementSibling ? h2.nextElementSibling.textContent : ''; });
+const weekly = () => page.evaluate(() => { const h2 = [...document.querySelectorAll('#view h2')].find(h => /주간 LT1 검증|LT1 검증 \(4주마다\)/.test(h.textContent)); return h2 && h2.nextElementSibling ? h2.nextElementSibling.textContent : ''; });
 const typeLac = async v => { for (const k of v) await page.click(`#lac-modal .keypad button[data-k="${k}"]`); await page.click('#lac-modal [data-x=save]'); await page.waitForTimeout(150); };
 await page.goto(base, { waitUntil: 'networkidle' }); await page.waitForSelector('#view .card');
 
