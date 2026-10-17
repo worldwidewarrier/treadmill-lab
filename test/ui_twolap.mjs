@@ -28,7 +28,7 @@ check('the fixes run once: a second load changes nothing', again.z === 143 && ag
 let home = await text();
 check('Home shows the weekly LT1 check with the test speed 8.7 km/h and a way into the two-lap mode', /주간 LT1 검증/.test(home) && /8\.7 km\/h/.test(home) && !!(await page.$('[data-action=go-live][data-mode=verify]')), home.slice(0, 80));
 await page.click('#nav button[data-view=plan]'); await page.waitForSelector('.plan-day'); const plan = await text();
-check('Plan: Thursday is the two-lap verification run at 8.7 km/h, with the procedure note; the long run says mid sample at 30 min', /LT1 검증 달리기 \(두 랩, 8\.7 km\/h\)/.test(plan) && /간격 60–90초/.test(plan) && /30:00에 중간 채혈/.test(plan), plan.slice(0, 120));
+check('Plan: Thursday is the two-lap verification run at 8.7 km/h, with the procedure note; the long run samples only at the end, every other week (v1.1.35)', /LT1 검증 달리기 \(두 랩, 8\.7 km\/h\)/.test(plan) && /간격 60–90초/.test(plan) && !/30:00에 중간 채혈/.test(plan) && /(종료 채혈 1회|채혈 없음\(격주\))/.test(plan), plan.slice(0, 120));
 await shot('40-plan-thursday');
 // ---- 3. the two-lap run with the demo strap: warm-up 1 min, lap 1 2 min, lap 2 3 min at ×60
 await page.click('#nav button[data-view=live]'); await page.waitForSelector('#mode-seg'); await page.click('#mode-seg button[data-mode=verify]'); await page.waitForSelector('#lap-1');
@@ -65,7 +65,7 @@ const card = await page.evaluate(() => ({ type: TL.detail.type, purpose: TL.deta
 check('the saved session: type verify, purpose lt1, speed 8.7', card.type === 'verify' && card.purpose === 'lt1' && card.speed === 8.7, JSON.stringify([card.type, card.purpose, card.speed]));
 check('card: the laps line — lap 1 2.0 min, HR 5–10 min (n/a: lap 1 shorter than 6 min), gap ≈ 90 s, lap 2 3.0 min', /랩 1 2\.0분/.test(card.laps) && /간격 \d{2,3}초/.test(card.laps) && /랩 2 (2\.[89]|3\.0)분/.test(card.laps), card.laps.slice(0, 160));
 check('card: the gap value sits in the lap-1 field (label 랩 1(2분)), the end value in the end field', card.mid === '1' && card.end === '1.3' && /랩 1\(2분\)/.test(card.midLbl), `${card.mid} ${card.end} ${card.midLbl}`);
-check('card: the two-lap verdict — pass, +0.2 next week, the line 0.8 + 0.5 = 1.3, no zone button, the band-finder note', /통과 @ 8\.7 km\/h/.test(card.verdict) && /\+0\.2/.test(card.verdict) && !(await page.$('[data-action=apply-verdict]')) && /주간 범위 탐색기|Weekly band finder/.test(await text()), card.verdict.slice(0, 120));
+check('card: the two-lap verdict — pass, +0.3 next check (v1.1.35), the line 0.8 + 0.5 = 1.3, no zone button, the band-finder note', /통과 @ 8\.7 km\/h/.test(card.verdict) && /\+0\.3/.test(card.verdict) && !(await page.$('[data-action=apply-verdict]')) && /주간 범위 탐색기|Weekly band finder/.test(await text()), card.verdict.slice(0, 120));
 check('card: the purpose select has no "auto" for a two-lap run', card.purposeOpts.join(',') === 'lt1,mlss', card.purposeOpts.join(','));
 check('events: the lactate rows carry their tags (lap 1 · 2:00 at speed · s after the stop; lap 2 · 3:00)', card.events.some(r => /랩 1 · 2:0[01] 달림/.test(r) && /정지 후 \d+초/.test(r)) && card.events.some(r => /랩 2 · 3:0\d 달림/.test(r)), card.events.filter(r => /lactate/.test(r)).join(' | '));
 await shot('43-verify-card');
@@ -80,7 +80,7 @@ await page.evaluate(async () => { const { store } = await import('./js/store.js'
     return { id, type: 'verify', final: true, sourceKind: 'ble', startedAt: S(0), endedAt: S(2840), speed, incline: 1, purpose: 'lt1', laps: { warmupSec: 300, lap1Sec: 600, lap2Sec: 1800, gapCapSec: 180, sampleAtSec: 30 }, hrLive, features: [], events, metrics: { durationSec: 2840, meanHr: hr } }; };
   await store.putSession(mk('wk1', 8.7, 1.0, 1.3, 14)); await store.putSession(mk('wk2', 8.9, 1.0, 1.4, 7)); });
 await page.click('#nav button[data-view=home]'); await page.waitForSelector('[data-action=apply-band]', { timeout: 8000 }); home = await text();
-check('Home after two passes (8.7, 8.9): this week 9.0 km/h (capped at 8.7 + 0.3), "pass 2 weeks running", the band change LT1 8.7→8.9 offered', /9\.0 km\/h/.test(home) && /통과 2주 연속/.test(home) && /8\.7→8\.9 km\/h/.test(home), home.slice(0, 200));
+check('Home after two passes (8.7, 8.9): this week 9.0 km/h (capped at 8.7 + 0.3), "pass 2 checks running", the band change LT1 8.7→8.9 offered', /9\.0 km\/h/.test(home) && /통과 2회 연속/.test(home) && /8\.7→8\.9 km\/h/.test(home), home.slice(0, 200));
 await shot('44-home-band');
 await page.click('[data-action=apply-band]'); await page.waitForTimeout(500);
 const z = await page.evaluate(() => TL.settings.zones);

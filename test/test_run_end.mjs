@@ -153,7 +153,7 @@ const truthHr = (s, a, b) => mean(s.hrLive.filter(p => p[0] >= T0 + a * 1000 && 
   check('typed 5 min after the stop: relied on', te.how === 'sample' && te.sure && Math.abs(rel(early, te.end) - 1800) <= 20);
   check(`typed 8 min after the stop (> ${RUN_END.lateMs / 60000} min): the stop is shown but not relied on`, tl.how === 'sample' && !tl.sure && tl.why === 'late-entry' && Math.abs(rel(late, tl.end) - 1800) <= 20 && endWindowStats(late).entryT === T0 + (1800 + 480) * 1000);
   check('  then: the proxy call is withheld and nothing is offered for the zones', lactateVerdict(late).unsure === true && lactateVerdict(late).level === 'near' && verdictZoneChange({ ...ZONES, lt2Hr: 120, lt2Speed: 9 }, late) === null && lactateVerdict(early).unsure !== true);
-  const z = verdictZoneChange({ ...ZONES, lt2Hr: 120, lt2Speed: 9 }, { ...late, lactateChecks: { end: 2.5 } }); check('  a verdict that needs no proxy (end 2.5 → below LT2): the speed moves, the heart rate does not', z && z.zones.lt2Speed === 10.5 && z.zones.lt2Hr === 120, z ? z.en : 'none');
+  const z = verdictZoneChange({ ...ZONES, lt2Hr: 120, lt2Speed: 9 }, { ...late, lactateChecks: { end: 2.5 } }); check('  an end-only value (end 2.5, "probably below LT2") is information: no zone moves on it (v1.1.35)', z === null && lactateVerdict({ ...late, lactateChecks: { end: 2.5 } }).proxy === true, z ? z.en : 'none');
   const far = mk({ hr: simHr({ segs: [{ until: 1800, hr: 160 }, { until: 1890, hr: 118, fast: 0.5 }, { until: 1800 + 1000, hr: 135, tau: 40 }], seed: 12 }), purpose: 'mlss', lactate: [[1800 + 900, 4.0]] }); const tf = runTimeline(far);
   check('typed 15 min after the stop: beyond the search, the end is only an estimate', tf.how === 'hr' && !tf.sure && tf.why === 'no-entry' && Math.abs(rel(far, tf.end) - 1800) <= 20, `${tf.how} ${mmss(rel(far, tf.end))}`);
 }
@@ -214,12 +214,12 @@ const truthHr = (s, a, b) => mean(s.hrLive.filter(p => p[0] >= T0 + a * 1000 && 
   check('  the estimate is what the card shows', Math.abs(ew.hr - truthHr(s, RUN - 300, RUN)) < 0.8, ew.hr.toFixed(1));
   const vd = lactateVerdict(s); check('  no proxy call from an estimated end', vd.level === 'near' && vd.unsure === true && vd.adjust === null && /uncertain/.test(vd.en), vd.en);
   const z = verdictZoneChange({ lt1Hr: 140, lt1Speed: 8.4, lt2Hr: 120, lt2Speed: 9 }, { ...s, lactateChecks: { end: 2.4 } });
-  check('  a verdict that does not need the proxy still moves the speed, never the heart rate', z && z.zones.lt2Speed === 10.5 && z.zones.lt2Hr === 120 && !/bpm/.test(z.en), z ? z.en : 'none');
+  check('  an end-only value never moves a zone (v1.1.35) — neither speed nor heart rate', z === null, z ? z.en : 'none');
   const m = sessionMetrics(s); check('  session numbers stay those of the whole recording', Math.abs(m.meanHr - truthHr(s, 0, RUN + 401)) < 1e-9);
   // Finish pressed while running: nothing to estimate
   const flat = mk({ hr: simHr({ segs: [{ until: RUN, hr: run }], seed: 22 }), purpose: 'mlss', extra: { lactateChecks: { end: 4.2 } } }); const tf = runTimeline(flat);
   check('no tail (Finish while running): the end is the end of the recording, certain', tf.how === 'finish' && tf.sure && tf.end === flat.endedAt && tf.stops.length === 0 && tf.tailSec === 0);
-  check('  proxy verdict as before', lactateVerdict(flat).level === 'ok' && !lactateVerdict(flat).unsure, lactateVerdict(flat).en);
+  check('  proxy verdict: information ("may be at/below"), certain end, no raise', lactateVerdict(flat).level === 'near' && lactateVerdict(flat).proxy === true && lactateVerdict(flat).adjust === null && !lactateVerdict(flat).unsure, lactateVerdict(flat).en);
   // a value typed by someone else while the athlete runs on, then Finish at speed
   const helper = mk({ hr: simHr({ segs: [{ until: 2100, hr: 138 }], seed: 23 }), speed: 8.6, lactate: [[2070, 1.8]] }); const th = runTimeline(helper);
   check('value typed while running, Finish while running: no stop is invented', th.how === 'finish' && th.sure && lactateChecks(helper).end === 1.8 && Math.abs(endWindowStats(helper).hr - truthHr(helper, 1800, 2101)) < 1e-9);

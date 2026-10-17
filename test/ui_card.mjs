@@ -58,9 +58,9 @@ check('value typed afterwards + tail: the card says the end is uncertain and off
 check('  no proxy verdict and no zone button while it is uncertain', c.notices.some(n => /대리 판정은 보류/.test(n)) && c.apply === null);
 await page.screenshot({ path: `${SHOTS}/41-card-uncertain.png`, fullPage: true });
 await page.click('#vc-runend-ok'); await page.waitForTimeout(500); c = await card(); const st = await page.evaluate(() => ({ runEndSec: TL.detail.runEndSec, dur: TL.detail.metrics?.durationSec }));
-check('  「확정」: the estimate becomes the end (stored), the proxy verdict and the zone button appear', !c.confirm && /직접 입력한 시각/.test(c.how) && Math.abs(st.runEndSec - 1800) <= 25 && !c.notices.some(n => /불확실/.test(n)) && c.notices.some(n => /대리 지표/.test(n)) && /LT2 150→16[0-3] bpm/.test(c.apply || ''), `${st.runEndSec} s · ${c.apply}`);
-const zBefore = await page.evaluate(() => ({ ...TL.settings.zones })); await page.click('[data-action=apply-verdict]'); await page.waitForTimeout(400); const zAfter = await page.evaluate(() => ({ ...TL.settings.zones }));
-check('  applying it writes exactly what the button said', zAfter.lt2Hr >= 160 && zAfter.lt2Hr <= 163 && zAfter.lt2Speed === 10.8 && zAfter.lt1Hr === zBefore.lt1Hr, `${zBefore.lt2Hr}@${zBefore.lt2Speed} → ${zAfter.lt2Hr}@${zAfter.lt2Speed}`);
+check('  「확정」: the estimate becomes the end (stored), the proxy verdict appears — as information, with no zone button (v1.1.35)', !c.confirm && /직접 입력한 시각/.test(c.how) && Math.abs(st.runEndSec - 1800) <= 25 && !c.notices.some(n => /불확실/.test(n)) && c.notices.some(n => /대리 지표/.test(n)) && !c.apply, `${st.runEndSec} s · ${c.apply}`);
+const zBefore = await page.evaluate(() => ({ ...TL.settings.zones })); const zAfter = await page.evaluate(() => ({ ...TL.settings.zones }));
+check('  no zone button to press: the zones stand as they were (a proxy never moves them, v1.1.35)', !(await page.$('[data-action=apply-verdict]')) && zAfter.lt2Hr === zBefore.lt2Hr && zAfter.lt2Speed === zBefore.lt2Speed, `${zBefore.lt2Hr}@${zBefore.lt2Speed} → ${zAfter.lt2Hr}@${zAfter.lt2Speed}`);
 await open('card-later'); await change('#vc-runend', ''); c = await card();
 check('  emptying the field returns to the automatic estimate', c.confirm && (await page.evaluate(() => TL.detail.runEndSec ?? null)) === null && /추정/.test(c.how));
 await change('#vc-runend', '99:00'); c = await card();

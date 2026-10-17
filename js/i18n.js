@@ -100,4 +100,9 @@ export const VOICE = {
   gap_cap: () => '간격 3분 초과. 엄격 규칙이 적용됩니다.',
   // LT1 session, late ceiling LT1 + 5 (v1.1.17)
   ceiling: () => '후반 심박 천장 초과. 속도를 0.3 낮추세요.',
+  // LT2 ladder (v1.1.35): the ceiling after minute 10 of a rep drifts up; heart rate alone never cuts the speed — RPE and lactate do
+  lt2_ceiling: () => '심박 천장 위. RPE 7 이상이면 다음 구간 0.3 느리게. 아니면 유지.',
+  vo2_high: () => '심박 95퍼센트 위. 속도 유지, 마지막 구간을 못 끝내면 다음엔 0.3 느리게.',
+  // step test (v1.1.35): lactate 6 is a floor, not the end — the end point is two stages past the 4-mmol point or the heart-rate criterion
+  lactate_floor: (n) => `젖산 6 이상. 종료는 4 지점에서 두 단계 뒤, 또는 심박 기준. ${n}단계 더.`,
 };

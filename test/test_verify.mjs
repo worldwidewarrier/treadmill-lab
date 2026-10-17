@@ -19,7 +19,7 @@ check('LT1 end 2.3 → near (−2)', (() => { const v = lactateVerdict(mk('lt1',
 check('LT1 end 3.1 → high (−4)', (() => { const v = lactateVerdict(mk('lt1', 10, { end: 3.1 })); return v.level === 'high' && v.adjust.lt1Hr === -4; })());
 // LT2 / MLSS verdicts
 check('LT2 Δ 0.6 → MLSS confirmed, hold (no raise; v1.1.17)', (() => { const v = lactateVerdict(mk('lt2', 12, { mid: 3.4, end: 4.0 })); return v.level === 'ok' && v.adjust === null && v.hold === true && /hold/i.test(v.en); })());
-check('LT2 Δ 0.4 → ok (+0.3)', (() => { const v = lactateVerdict(mk('lt2', 12.2, { mid: 3.6, end: 4.0 })); return v.level === 'ok' && v.adjust.lt2Speed === 0.3; })());
+check('LT2 Δ 0.4 → pass — no raise from one pass (v1.1.35: two passes at the same speed), the end value is the MLSS lactate', (() => { const v = lactateVerdict(mk('lt2', 12.2, { mid: 3.6, end: 4.0 })); return v.level === 'ok' && v.adjust === null && v.pass === true && v.mlssLa === 4.0 && /[Tt]wo passes/.test(v.en); })());
 check('LT2 Δ 1.8 → high (−0.4)', (() => { const v = lactateVerdict(mk('lt2', 12.5, { mid: 3.8, end: 5.6 })); return v.level === 'high' && v.adjust.lt2Speed === -0.4; })());
 check('LT2 end-only 6.5 → high', lactateVerdict(mk('lt2', 13, { end: 6.5 })).level === 'high');
 check('no end sample → null', lactateVerdict(mk('lt1', 9, { rest: 1.0 })) === null);
@@ -48,7 +48,7 @@ check('continuous test: stages contiguous', sess.stages.slice(1).every((st, i) =
 {
   const { lactateVerdict } = await import('../js/prescribe.js');
   const mk = (durMin, drift, end, extra = {}) => { const t0 = Date.UTC(2026, 9, 7, 0, 0, 0); const hr = []; for (let s = 0; s < durMin * 60; s += 5) hr.push([t0 + s * 1000, Math.round(150 + (s > 600 ? drift * Math.min(1, (s - 600) / (durMin * 60 - 600)) : 0))]); return { type: 'free', speed: 10.5, startedAt: t0, endedAt: t0 + durMin * 60000, hrLive: hr, features: [], events: [{ t: t0 + durMin * 60000 - 20000, type: 'lactate', value: end }, ...(extra.rpe ? [{ t: t0 + durMin * 60000 - 10000, type: 'rpe', value: extra.rpe }] : [])] }; };
-  check('proxy: 30 min, drift +4, end 4.0 → ok (+0.3)', lactateVerdict(mk(30, 4, 4.0)).level === 'ok' && lactateVerdict(mk(30, 4, 4.0)).adjust.lt2Speed === 0.3);
+  check('proxy: 30 min, drift +4, end 4.0 → "may be at/below" (near, information, no raise — v1.1.35)', lactateVerdict(mk(30, 4, 4.0)).level === 'near' && lactateVerdict(mk(30, 4, 4.0)).proxy === true && lactateVerdict(mk(30, 4, 4.0)).adjust === null);
   check('proxy: 30 min, drift +11, end 4.5 → high', lactateVerdict(mk(30, 11, 4.5)).level === 'high');
   check('proxy: 30 min, drift +8.5 (≈7 measured), end 4.0 → near', lactateVerdict(mk(30, 8.5, 4.0)).level === 'near');
   check('proxy: 20 min, end 4.0 → near (withheld)', lactateVerdict(mk(20, 2, 4.0)).level === 'near');
@@ -64,12 +64,17 @@ check('continuous test: stages contiguous', sess.stages.slice(1).every((st, i) =
   const run = (speed, endHr, end, extra = {}) => { const t0 = Date.UTC(2026, 9, 7); const hr = []; for (let s = 0; s < 1800; s += 5) hr.push([t0 + s * 1000, endHr]); return { type: 'free', speed, startedAt: t0, endedAt: t0 + 1800000, hrLive: hr, features: [], events: [{ t: t0 + 1780000, type: 'lactate', value: end }], ...extra }; };
   const z = { lt1Hr: 140, lt1Speed: 8.4, lt2Hr: 157, lt2Speed: 10.5 };
   const a = verdictZoneChange(z, run(10.5, 158, 4.0, { purpose: 'mlss' }));
-  check('MLSS ok at 10.5/158 → LT2 HR floor 157→158, speed unchanged', a && a.zones.lt2Hr === 158 && a.zones.lt2Speed === 10.5 && !a.keys.includes('lt2Speed'), JSON.stringify(a?.keys));
+  check('end-only MLSS run at 10.5/158 (a proxy verdict): no zone change (v1.1.35 — proxies are information)', a === null, JSON.stringify(a?.keys));
   const b = verdictZoneChange(z, run(11.0, 163, 4.5, { purpose: 'mlss' }));
-  check('MLSS ok at 11.0/163 → LT2 11.0 km/h, 163 bpm', b && b.zones.lt2Speed === 11 && b.zones.lt2Hr === 163);
+  check('end-only MLSS run at 11.0/163: no zone change either', b === null);
+  const withMid = (speed, endHr, mid, end) => { const r = run(speed, endHr, end, { purpose: 'mlss' }); r.events = [{ t: r.startedAt, type: 'phase', phase: 'work' }, { t: r.startedAt + 600000, type: 'lactate', value: mid }, ...r.events]; return r; };
+  const b2 = verdictZoneChange(z, withMid(11.0, 163, 4.1, 4.5));
+  check('an MLSS check with a 10-min sample (rise 0.4, pass) raises the LT2 floor to 11.0 km/h, 163 bpm', b2 && b2.zones.lt2Speed === 11 && b2.zones.lt2Hr === 163, JSON.stringify(b2?.zones));
+  const b3 = verdictZoneChange(z, withMid(10.5, 160, 3.0, 4.4));
+  check('an MLSS check with a 10-min sample that fails (rise 1.4) lowers the cap: LT2 10.2 km/h, HR ≤ 157', b3 && b3.zones.lt2Speed === 10.2 && b3.zones.lt2Hr <= 157, JSON.stringify(b3?.zones));
   const hrs = []; const t0 = Date.UTC(2026, 9, 7); for (let s = 0; s < 1800; s += 5) hrs.push([t0 + s * 1000, 150 + (s > 600 ? 12 * (s - 600) / 1200 : 0)]);
   const c = verdictZoneChange(z, { ...run(10.5, 160, 5.0, { purpose: 'mlss' }), hrLive: hrs });
-  check('MLSS high (drift +12) at 10.5 → LT2 cap 10.2 km/h, HR ≤ end−3', c && c.zones.lt2Speed === 10.2 && c.zones.lt2Hr <= 158, JSON.stringify(c?.zones));
+  check('MLSS end-only run with drift +12 at 10.5: "possibly above" is information — no cap from a proxy (v1.1.35)', c === null, JSON.stringify(c?.zones));
   const d = verdictZoneChange(z, run(8.0, 136, 0.5));
   check('LT1 ok at 8.0/136 below current estimate → no change', d === null);
   const e = verdictZoneChange(z, run(8.5, 141, 1.6));

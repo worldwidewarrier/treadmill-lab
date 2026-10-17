@@ -48,25 +48,25 @@ check('the rebuilt 10/11 check reads as its summary did: pass @ 8.7, lap 1 0.9 �
 let z = await page.evaluate(() => TL.settings.zones);
 check('one pass changes no zone: LT1 143 @ 8.7, LT2 157 @ 10.5', z.lt1Hr === 143 && z.lt1Speed === 8.7 && z.lt2Hr === 157 && z.lt2Speed === 10.5, JSON.stringify(z));
 let w = await weekly();
-check('Home, weekly check: 8.9 km/h — "10/…, 8.7 km/h: 통과 → 이번 주 검사 속도 8.9 km/h (+0.2)", no band change yet, and the button carries 8.9', w && /^8\.9 km\/h/.test(w.text) && /8\.7 km\/h\): 통과 → 이번 주 검사 속도 8\.9 km\/h \(\+0\.2\)/.test(w.text) && /두 주 연속 같은 결과일 때만/.test(w.text) && w.speed === '8.9' && w.band === false, JSON.stringify(w));
+check('Home, weekly check: 9.0 km/h — "10/…, 8.7 km/h: 통과 → 이번 주 검사 속도 9.0 km/h (+0.3)" (v1.1.35), no band change yet, and the button carries 9.0', w && /^9\.0 km\/h/.test(w.text) && /8\.7 km\/h\): 통과 → 이번 주 검사 속도 9\.0 km\/h \(\+0\.3\)/.test(w.text) && /두 번 연속 같은 결과일 때만/.test(w.text) && w.speed === '9' && w.band === false, JSON.stringify(w));
 await noToast(); await shot('70-measured-home');
 let days = await planDays();
-check('Plan: Thursday is the check at 8.9 km/h; the easy days keep 8.1 with the warm-up at 7.0, the long run 7.5', /두 랩, 8\.9 km\/h/.test(days[3].head) && /· 8\.9 km\/h$/.test(days[3].nums) && days[3].wu === '워밍업 5분 · 걷기 5.5 → 7.0(0:30) km/h' && /^133–140 bpm · 8\.1 km\/h$/.test(days[0].nums) && days[0].wu === '워밍업 5분 · 7.0 km/h' && /· 7\.5 km\/h$/.test(days[5].nums), JSON.stringify(days.map(d => `${d.nums} | ${d.wu}`)));
+check('Plan: Thursday is the check at 9.0 km/h; Monday keeps 8.1 with the warm-up at 7.0, the long run 7.5', /두 랩, 9\.0 km\/h/.test(days[3].head) && /· 9\.0 km\/h$/.test(days[3].nums) && days[3].wu === '워밍업 5분 · 걷기 5.5 → 7.0(0:30) km/h' && /^133–140 bpm · 8\.1 km\/h$/.test(days[0].nums) && days[0].wu === '워밍업 5분 · 7.0 km/h' && /· 7\.5 km\/h$/.test(days[5].nums), JSON.stringify(days.map(d => `${d.nums} | ${d.wu}`)));
 // the check opened from Home: the field, then the banner
 await page.click('#nav button[data-view=home]'); await page.waitForSelector('[data-action=go-live][data-mode=verify]'); await page.click('[data-action=go-live][data-mode=verify]'); await page.waitForSelector('#sess-speed');
-check('the check opened from Home: 8.9 in the speed field; the warm-up line walk 5.5 → 7.0', await page.inputValue('#sess-speed') === '8.9' && await page.textContent('#wu-line') === '워밍업 5분: 걷기 5.5 → 7.0(0:30) km/h', `${await page.inputValue('#sess-speed')} | ${await page.textContent('#wu-line')}`);
+check('the check opened from Home: 9.0 in the speed field; the warm-up line walk 5.5 → 7.0', await page.inputValue('#sess-speed') === '9' && await page.textContent('#wu-line') === '워밍업 5분: 걷기 5.5 → 7.0(0:30) km/h', `${await page.inputValue('#sess-speed')} | ${await page.textContent('#wu-line')}`);
 await page.click('#src-seg button[data-src=demo]'); await page.selectOption('#demo-speed', '30'); await page.click('[data-action=connect]'); await page.waitForSelector('[data-action=start]:not([disabled])'); await page.click('[data-action=start]'); await page.waitForSelector('#lv-zone');
 const read = () => { const zt = document.getElementById('lv-zone-text'); return { phase: TL.engine.phase, speed: document.getElementById('lv-speed')?.textContent ?? null, text: zt.textContent, next: zt.querySelector('.wu-next')?.textContent ?? null }; };
 let s = await (await page.waitForFunction(`(() => { const read = ${read.toString()}; return TL.engine && TL.engine.phase === 'warmup' && TL.engine.view().phaseElapsed >= 60 ? read() : null; })()`, null, { timeout: 30000 })).jsonValue();
-check('live, warm-up from 0:30: the banner 7.0, and under it lap 1 at the next test speed — "5:00부터 랩 1 8.9 km/h"', s.speed === '7.0' && s.next === '5:00부터 랩 1 8.9 km/h', JSON.stringify(s));
+check('live, warm-up from 0:30: the banner 7.0, and under it lap 1 at the next test speed — "5:00부터 랩 1 9.0 km/h"', s.speed === '7.0' && s.next === '5:00부터 랩 1 9.0 km/h', JSON.stringify(s));
 s = await (await page.waitForFunction(`(() => { const read = ${read.toString()}; return TL.engine && TL.engine.phase === 'work' && TL.engine.view().phaseElapsed >= 30 ? read() : null; })()`, null, { timeout: 60000 })).jsonValue();
-check('live, lap 1: "랩 1 · 8.9 km/h"', s.speed === null && /랩 1 · 8\.9 km\/h/.test(s.text), JSON.stringify(s));
+check('live, lap 1: "랩 1 · 9.0 km/h"', s.speed === null && /랩 1 · 9\.0 km\/h/.test(s.text), JSON.stringify(s));
 await page.click('[data-action=stop]'); await page.click('.modal [data-x=yes]'); await page.waitForTimeout(800);
 // the Session tab on its own, and the easy run beside it
 await page.click('#nav button[data-view=live]'); await page.waitForSelector('#mode-seg'); await page.click('#mode-seg button[data-mode=verify]'); await page.waitForSelector('#mode-seg button.active[data-mode=verify]'); await page.waitForSelector('#sess-speed');
 const tabSpeed = await page.inputValue('#sess-speed');
 await page.click('#mode-seg button[data-mode=lt1]'); await page.waitForSelector('#mode-seg button.active[data-mode=lt1]'); await page.waitForSelector('#lt1-min');
-check('Session tab: the check proposes 8.9; the easy run still 8.1 with "워밍업 5분: 7.0 km/h"', tabSpeed === '8.9' && await page.inputValue('#sess-speed') === '8.1' && await page.textContent('#wu-line') === '워밍업 5분: 7.0 km/h', `${tabSpeed} | ${await page.inputValue('#sess-speed')} | ${await page.textContent('#wu-line')}`);
+check('Session tab: the check proposes 9.0; the easy run still 8.1 with "워밍업 5분: 7.0 km/h"', tabSpeed === '9' && await page.inputValue('#sess-speed') === '8.1' && await page.textContent('#wu-line') === '워밍업 5분: 7.0 km/h', `${tabSpeed} | ${await page.inputValue('#sess-speed')} | ${await page.textContent('#wu-line')}`);
 
 // ---- 2. the multi-day curve of points around LT1 ----
 let c = await curve();
@@ -84,7 +84,7 @@ c = await curve();
 check('five points: the cubic on its own would say LT1 under 8.5 km/h and LT2 under 9.0 — neither is shown', c.rows.length === 5 && c.raw.lt1.x < 8.5 && c.raw.lt2.x < 9.0 && /bpm8\.9 km\/h$/.test(c.boxes[0]) && /– bpm– km\/h$/.test(c.boxes[1]), JSON.stringify({ raw: c.raw, boxes: c.boxes }));
 check('…the note: LT1 read between 8.9 and 9.0; the highest value 2.8 is under 4.0, so no LT2; apply stays closed', c.disabled === true && /두 점\(8\.9 · 9\.0 km\/h\) 사이에서 읽었습니다/.test(c.note) && /가장 높은 젖산이 2\.8 mmol\/L\(4\.0 미만\)/.test(c.note) && /MLSS 검증·계단 테스트/.test(c.note), c.note.slice(0, 200));
 await page.click('#nav button[data-view=home]'); await page.waitForSelector('[data-action=apply-band]', { timeout: 8000 }); w = await weekly();
-check('Home after the second pass: the band change LT1 143→147 bpm, 8.7→8.9 km/h is offered; this week 9.0 (the cap)', /^9\.0 km\/h/.test(w.text) && /통과 2주 연속/.test(w.text) && /LT1 143→147 bpm, LT1 8\.7→8\.9 km\/h/.test(w.text) && w.band === true, w.text.slice(0, 200));
+check('Home after the second pass: the band change LT1 143→147 bpm, 8.7→8.9 km/h is offered; this week 9.0 (the cap)', /^9\.0 km\/h/.test(w.text) && /통과 2회 연속/.test(w.text) && /LT1 143→147 bpm, LT1 8\.7→8\.9 km\/h/.test(w.text) && w.band === true, w.text.slice(0, 200));
 await page.click('[data-action=apply-band]'); await page.waitForTimeout(500); z = await page.evaluate(() => TL.settings.zones);
 check('「범위 반영」: LT1 147 @ 8.9; LT2 untouched', z.lt1Hr === 147 && z.lt1Speed === 8.9 && z.lt2Hr === 157 && z.lt2Speed === 10.5, JSON.stringify(z));
 days = await planDays();

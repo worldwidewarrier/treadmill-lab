@@ -9,6 +9,7 @@ export const DEFAULT_PROTOCOL = {
   fixedSpeed: 7.0, startIncline: 1.0, inclineStep: 2.0,
   stageSec: 240, pauseSec: 30, warmupSec: 300, warmupSpeed: 5.5,
   stopLactate: 6.0, stopHrPct: 95, maxStages: 12, // (v1.1.23: the RPE stop criterion is gone — heart rate ≥ stopHrPct % of max replaces it)
+  minStagesPast4: 2, // v1.1.35 (review §2): the same end point every test — lactate ≥ stopLactate ends it only once this many stages at or above 4.0 mmol/L are done; otherwise the end is HR ≥ stopHrPct % or an uncompleted stage (ModDmax draws its line to the last point)
 };
 const wall = () => (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now()); // real time, also for demo / replay sources that run on a fast data clock
 const QUIET_MS = 5000; // the strap notifies once a second; nothing for 5 s = it is not sending (out of range, reconnecting)
@@ -23,6 +24,8 @@ export const JUDGE_FROM_SEC = 600; // LT1 session: the heart-rate band is judged
 /** Minutes of an LT1 session after which the heart-rate ceiling is LT1 + 5 (drift allowed) rather than the band's upper edge. */
 export const LATE_FROM_SEC = 1200;
 export const LT1_WARMUP_SEC = 300; // LT1 session: the easy jog before the main speed (the "본 속도로" cue)
+/** LT2 ladder (v1.1.35): no zone cue in the first LT2_GRACE_SEC of a rep; after LT2_LATE_FROM_SEC the ceiling rises +1 bpm per LT2_LATE_STEP_SEC (drift allowed); 60 s above it → the "RPE decides" cue, not "slow down". */
+export const LT2_GRACE_SEC = 240, LT2_LATE_FROM_SEC = 600, LT2_LATE_STEP_SEC = 120;
 /**
  * The warm-up of a session as steps (v1.1.26): the speed to set from each moment of the warm-up on — one speed per step, the same
  * numbers at the same seconds as the spoken cues (start() and the ramp cues of runPhases; test/test_warmup.mjs holds the two together).
@@ -81,7 +84,7 @@ export class SessionEngine {
   now() { return this.source && this.source.now ? this.source.now() : Date.now(); }
   /** targets / meta: pass null to clear what a previous session left behind; leave undefined to keep. */
   configure({ mode, protocol, intervals, laps, targets, meta }) {
-    if (mode) this.mode = mode; if (protocol) this.protocol = { ...this.protocol, ...protocol }; if (intervals) this.intervals = { ...this.intervals, ...intervals }; if (laps) this.laps = { ...this.laps, ...laps };
+    if (mode) this.mode = mode; if (protocol) this.protocol = { ...this.protocol, ...protocol }; if (intervals) this.intervals = { ...DEFAULT_INTERVALS, ...intervals }; if (laps) this.laps = { ...this.laps, ...laps }; // (intervals: on the defaults, not on the previous session's — its kind / speed offset must not leak into the next)
     if (targets !== undefined) this.targets = targets || null; if (meta !== undefined) this.meta = meta ? { ...meta } : null;
     this.plan = this.mode === 'test' ? buildStages(this.protocol, this.settings.treadmill) : [];
     this.onUpdate(this.view());
@@ -208,7 +211,12 @@ export class SessionEngine {
     const idx = stageIdx ?? this.pendingLactate; const st = this.stages.find(s => s.idx === idx) || this.stages[this.stages.length - 1];
     if (st && value != null && Number.isFinite(value)) { if (st.lactate != null) st.lactate2 = value; else st.lactate = value; /* a second strip at the same stage (v1.1.31: kept even when equal — a duplicate) */ }
     const now = this.now(); this.pendingLactate = null; this.events.push({ t: now, type: 'lactate', stage: st ? st.idx : null, rep: this.rep, phase: this.phase, value, ...this.sampleTags(now) });
-    if (value >= this.protocol.stopLactate && !this.stopAdvised && this.mode === 'test') { this.stopAdvised = true; this.alerts?.cue(VOICE.stop_criteria(), { beep: 'triple' }); }
+    if (value >= this.protocol.stopLactate && !this.stopAdvised && this.mode === 'test') {
+      // v1.1.35: lactate ≥ 6.0 is a floor, not the end — the test goes on until minStagesPast4 stages at or above 4.0 mmol/L are done (the same end point every time), unless the heart-rate criterion or an uncompleted stage ends it first
+      const at4 = this.stages.filter(x => Number.isFinite(x.lactate) && Math.max(x.lactate, Number.isFinite(x.lactate2) ? x.lactate2 : -Infinity) >= 4.0).length; const beyond = Math.max(0, at4 - 1); // stages beyond the first one at or above 4.0 (the 4-mmol point itself does not count)
+      const need = Number.isFinite(this.protocol.minStagesPast4) ? this.protocol.minStagesPast4 : 2;
+      if (beyond >= need) { this.stopAdvised = true; this.alerts?.cue(VOICE.stop_criteria(), { beep: 'triple' }); } else this.alerts?.speak(VOICE.lactate_floor(need - beyond));
+    }
     this.onUpdate(this.view());
   }
   stop(reason = 'user') {
@@ -287,15 +295,19 @@ export class SessionEngine {
     this.tiz.totalSec += this.stepSec;
     // LT1 session (v1.1.17): speed is the dose. After LATE_FROM_SEC of running the ceiling is LT1 + 5 (ceilHr) — the drift of a
     // steady run is allowed — and crossing it for a minute brings the "slow down 0.3" cue instead of the band's zone-high cue.
-    const runSec = (now - this.startedAt - this.pauseAccum) / 1000;
+    const runSec = (now - this.startedAt - this.pauseAccum) / 1000; const repSec = this.phaseSec(now);
+    const lt2 = this.mode === 'lt2';
+    // LT2 ladder (v1.1.35, review §3): no cue in the first minutes of a rep (the heart rate is still rising); after minute 10 of a rep the ceiling rises +1 bpm per 2 min — the drift of a steady state (+12.6 bpm at MLSS with lactate flat, Baron 2003/2008) is not a reason to slow down; 60 s above it → the "RPE decides" cue
+    const lt2Grace = lt2 && repSec < (Number.isFinite(T.repGraceSec) ? T.repGraceSec : LT2_GRACE_SEC);
+    const lt2Extra = lt2 && Number.isFinite(T.ceilHr) && repSec > (T.lateFromSec ?? LT2_LATE_FROM_SEC) ? Math.floor((repSec - (T.lateFromSec ?? LT2_LATE_FROM_SEC)) / (T.lateStepSec || LT2_LATE_STEP_SEC)) : 0;
     const late = this.mode === 'lt1' && Number.isFinite(T.ceilHr) && runSec >= (T.lateFromSec ?? LATE_FROM_SEC);
-    const grace = this.mode === 'lt1' && runSec < (T.judgeFromSec ?? JUDGE_FROM_SEC); // v1.1.20: the band is judged from minute 10 — the warm-up ramp (0–5 min easy jog) gives no zone cues
-    const hi = late ? T.ceilHr : T.hrHi;
+    const grace = (this.mode === 'lt1' && runSec < (T.judgeFromSec ?? JUDGE_FROM_SEC)) || lt2Grace; // v1.1.20: the band is judged from minute 10 — the warm-up ramp (0–5 min easy jog) gives no zone cues
+    const hi = late ? T.ceilHr : lt2 ? T.hrHi + lt2Extra : T.hrHi;
     let z = 'in'; if (hr > hi) z = 'above'; else if (hr < T.hrLo) z = 'below'; else this.tiz.inSec += this.stepSec;
-    if (late && z === 'in' && hr > T.hrHi) z = 'drift'; // above the band, under the ceiling: shown, not cued
+    if ((late || lt2Extra > 0) && z === 'in' && hr > T.hrHi) z = 'drift'; // above the band, under the ceiling: shown, not cued
     const A = this.alerts, exitSec = this.settings.alerts?.zoneExitSec ?? 30;
-    if (z === 'in' || z === 'drift' || grace) this.outsideSince = 0; else { if (!this.outsideSince) this.outsideSince = now; if ((now - this.outsideSince) / 1000 >= (late && z === 'above' ? 60 : exitSec)) { if (late && z === 'above') A?.cue(VOICE.ceiling(), { beep: 'low', vib: [150, 100, 150], key: 'ceil', minGapSec: 180 }); else A?.cue(z === 'above' ? VOICE.zone_high() : VOICE.zone_low(), { beep: z === 'above' ? 'low' : 'high', vib: [150, 100, 150], key: 'zone', minGapSec: 60 }); } }
-    this.zoneState = z;
+    if (z === 'in' || z === 'drift' || grace) this.outsideSince = 0; else { if (!this.outsideSince) this.outsideSince = now; if ((now - this.outsideSince) / 1000 >= ((late || lt2) && z === 'above' ? 60 : exitSec)) { if (late && z === 'above') A?.cue(VOICE.ceiling(), { beep: 'low', vib: [150, 100, 150], key: 'ceil', minGapSec: 180 }); else if (lt2 && z === 'above') A?.cue(T.kind === 'vo2' ? VOICE.vo2_high() : VOICE.lt2_ceiling(), { beep: 'low', vib: [150, 100, 150], key: 'ceil2', minGapSec: 240 }); else A?.cue(z === 'above' ? VOICE.zone_high() : VOICE.zone_low(), { beep: z === 'above' ? 'low' : 'high', vib: [150, 100, 150], key: 'zone', minGapSec: 60 }); } }
+    this.zoneState = grace && lt2 ? 'waiting' : z;
     if (this.mode === 'lt1' && this.settings.alpha1?.guidance !== 'off' && Number.isFinite(rec.alpha1) && T.alphaMin) {
       if (rec.alpha1 < T.alphaMin) { if (!this.alphaLowSince) this.alphaLowSince = now; if ((now - this.alphaLowSince) / 1000 >= 60) A?.cue(VOICE.alpha_low(), { beep: 'low', key: 'alpha', minGapSec: 120 }); }
       else this.alphaLowSince = 0;
