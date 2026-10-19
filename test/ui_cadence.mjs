@@ -20,8 +20,9 @@ await page.evaluate(async () => {
 await page.reload({ waitUntil: 'networkidle' }); await page.waitForSelector('#view .card'); await page.waitForTimeout(300);
 const home = await page.evaluate(() => { const h2 = [...document.querySelectorAll('#view h2')].find(h => /LT1 검증/.test(h.textContent)); return { title: h2 ? h2.textContent : '', card: h2 && h2.nextElementSibling ? h2.nextElementSibling.textContent : '', mode: TL.bandFinder.cadence.mode }; });
 check('Home: "LT1 검증 (4주마다)", settled at 8.9, the next date and the daily-app hint', home.mode === 'maintenance' && /4주마다/.test(home.title) && /8\.9 km\/h/.test(home.card) && /범위 확인됨/.test(home.card) && /LT1 검사 주기/.test(home.card), home.card.slice(0, 220));
+await page.evaluate(async () => { TL.settings.plan.calendar = ''; await TL.saveSettings(); }); // (a plain week: the default calendar's 10/19 week is the MLSS weekend)
 await page.click('#nav button[data-view=plan]'); await page.waitForSelector('.plan-day'); await page.waitForTimeout(200);
-const thu = await page.evaluate(() => { const rows = [...document.querySelectorAll('.plan-day')]; const r = rows.find(x => /목|Thu/.test(x.querySelector('.dow, b, .day')?.textContent || x.textContent.slice(0, 12))); return r ? r.textContent : ''; });
-check('Plan (this week): Thursday is an easy run with "LT1 검사 없는 주"', /LT1 검사 없는 주/.test(thu) && !/LT1 검증 달리기/.test(thu), thu.slice(0, 160));
+const thu = await page.evaluate(() => { const rows = [...document.querySelectorAll('.plan-day')]; const r = rows.find(x => /토|Sat/.test(x.querySelector('.dow')?.textContent || '')); return r ? r.textContent : ''; });
+check('Plan (this week, v1.1.36): Saturday is an easy run with "LT1 검사 없는 주" (the check moved to Saturday at the gym)', /LT1 검사 없는 주/.test(thu) && !/LT1 검증 달리기/.test(thu), thu.slice(0, 160));
 check('no console or page errors', errors.length === 0, errors.join(' | ').slice(0, 300));
 await browser.close(); console.log(fails ? `\n${fails} FAILED` : '\nALL PASS'); process.exit(fails ? 1 : 0);

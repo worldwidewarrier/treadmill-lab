@@ -263,7 +263,7 @@ export class SessionEngine {
       }
     } else if (this.mode === 'lt1' && this.targets?.durationSec) {
       const left = this.targets.durationSec - el; const W = this.meta?.warmup;
-      if (el >= LT1_WARMUP_SEC && !this.warned.main) { this.warned.main = 1; A?.speak(VOICE.lt1_main(Number.isFinite(this.meta?.speed) ? (Math.round(this.meta.speed * 10) / 10).toFixed(1) : W?.easy)); } // one speed (v1.1.26): the session's own, else the easy speed
+      if (el >= LT1_WARMUP_SEC && !this.warned.main) { this.warned.main = 1; A?.speak(VOICE.lt1_main(Number.isFinite(this.meta?.speed) && (!this.meta?.surface || this.meta.surface === 'treadmill') ? (Math.round(this.meta.speed * 10) / 10).toFixed(1) : W?.easy)); /* v1.1.36: off the belt no speed is spoken (W is null there too) */ } // one speed (v1.1.26): the session's own, else the easy speed
       if (el >= (this.targets.judgeFromSec ?? JUDGE_FROM_SEC) && !this.warned.judge) { this.warned.judge = 1; A?.speak(VOICE.lt1_judge()); }
       if (Math.abs(left - this.targets.durationSec / 2) < 1 && !this.warned.half) { this.warned.half = 1; A?.speak(VOICE.halfway()); }
       if (left <= 60 && !this.warned.m1) { this.warned.m1 = 1; A?.speak(VOICE.minute_left()); }
@@ -338,7 +338,7 @@ export class SessionEngine {
       id: this.sessionId, type: this.mode, startedAt: this.startedAt, endedAt: final ? this.endedAt : null, final: !!final,
       sourceKind: this.source?.kind || 'unknown', protocol: this.mode === 'test' ? { ...this.protocol } : null, intervals: this.mode === 'lt2' ? { ...this.intervals } : null, targets: this.targets,
       laps: this.mode === 'verify' ? { ...this.laps, ...this.lapTimes } : null, purpose: this.mode === 'verify' ? (this.meta?.purpose || 'lt1') : undefined,
-      alpha1Settings: { ...(this.settings.alpha1 || {}) }, speed: this.meta?.speed ?? null, incline: this.meta?.incline ?? null,
+      alpha1Settings: { ...(this.settings.alpha1 || {}) }, speed: this.meta?.speed ?? null, incline: this.meta?.incline ?? null, surface: this.mode === 'test' ? 'treadmill' : (this.meta?.surface || 'treadmill'), // v1.1.36: where it was run (only a motorized belt gives a usable speed)
       rr: this.rr, features: this.features, hrLive: this.hrLive, stages: this.stages.map(s => ({ ...s })), events: this.events, tiz: { ...this.tiz }, pauseMs: this.pauseAccum + (!final && this.paused ? Math.max(0, this.now() - this.pauseStartedAt) : 0), // an autosave taken during a pause counts the pause so far
     };
   }

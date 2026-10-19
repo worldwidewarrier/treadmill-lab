@@ -45,7 +45,7 @@ const ta = await page.$eval('[data-set="plan.calendar"]', e => e.value);
 check('…the week calendar text (a field) is left exactly as it was', /^2026-10-12 recovery 회복주 \/ recovery week/.test(ta), ta.slice(0, 50));
 await page.click('#nav button[data-view=plan]'); await page.waitForSelector('.plan-day');
 const dow = await page.$$eval('.plan-day .dow', d => d.map(x => x.textContent.trim()));
-check('Plan: the days read Mon…Sun first, Korean under them', dow.join(',') === 'Mon월,Tue화,Wed수,Thu목,Fri금,Sat토,Sun일', dow.join(','));
+check('Plan: the days read Mon…Sun first, Korean under them', dow.map(x => x.replace(/(unit|track|hill|gym|부대|트랙|언덕|헬스장)$/, '')).join(',') === 'Mon월,Tue화,Wed수,Thu목,Fri금,Sat토,Sun일', dow.join(','));
 check('Plan: the footnote starts "Running … min"', /^Running \d+ min/.test(await firstText('.plan-day ~ p.small.muted, #view .card p.small.muted')));
 await page.click('#nav button[data-view=live]'); await page.waitForSelector('#mode-seg'); await page.click('#mode-seg button[data-mode=lt2]'); await page.waitForSelector('#lt2-reps');
 const lt2l = await page.evaluate(() => [...document.querySelectorAll('label.field')].map(l => [...l.childNodes].filter(n => n.nodeType === 3).map(n => n.data.trim()).join(' ').trim()));
@@ -64,6 +64,7 @@ await page.click('#nav button[data-view=live]'); await page.waitForSelector('#mo
 for (const m of ['test', 'verify', 'lt1', 'lt2', 'free']) { await page.click(`#mode-seg button[data-mode=${m}]`); await page.waitForSelector(`#mode-seg button.active[data-mode=${m}]`); await page.waitForTimeout(150); const a = await audit(); check(`setup ${m}: English first, none missed`, a.wrong.length === 0 && a.missed.length === 0, JSON.stringify(a.missed.slice(0, 3))); }
 await page.click('#nav button[data-view=home]'); await page.waitForSelector('[data-action=go-live]'); await page.click('#view .card [data-action=go-live]'); await page.waitForSelector('#sess-speed');
 check('Start from Home still carries the plan\'s speed into the field', (await page.inputValue('#sess-speed')) !== '');
+if (await page.$('#sess-surface')) { await page.selectOption('#sess-surface', 'treadmill'); await page.waitForTimeout(150); } // (v1.1.36: a weekday from Home is at the unit — no speed banner there; the banner is checked on the belt)
 await page.click('#src-seg button[data-src=demo]'); await page.selectOption('#demo-speed', '30'); await page.click('[data-action=connect]'); await page.waitForSelector('[data-action=start]:not([disabled])'); await page.click('[data-action=start]'); await page.waitForSelector('#lv-zone');
 await page.waitForFunction(() => TL.engine.view().phaseElapsed >= 20, null, { timeout: 30000 }); await page.waitForTimeout(1200); await noToast();
 const live = await page.evaluate(() => ({ banner: document.getElementById('lv-zone-text').textContent, speed: document.getElementById('lv-speed')?.textContent }));

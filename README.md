@@ -98,6 +98,7 @@ node test/test_verify.mjs          # lactate verification verdicts, zone updates
 node test/test_run_end.mjs         # where the running stopped: simulated runs with stops, walks, jogs, surges, pauses, gaps; uncertain ends; odd records (≈10 s)
 node test/test_twolap.mjs          # the two-lap LT1 check (v1.1.17): engine phases/cues/tags, verdict (pass / borderline / fail, strict gap, durability), band finder, curve rules, MLSS hold, late ceiling, long-run cap, α1 gate, resting-lactate reminder; v1.1.26: a real check rebuilt from its summary (10/11 → next speed, no band change, the speeds), what the curve's points can carry
 node test/test_warmup.mjs          # the speed to set (v1.1.26): one speed per session part from the thresholds (no ranges), warm-up / cool-down steps per mode, and that each step is the second its cue is spoken
+node test/test_places.mjs          # v1.1.36: places — weekdays at the unit (track / hill / non-motorized: heart rate, lap pace), weekends at the gym (the checks, the long run), satoff, sessions off the belt
 TZ=Asia/Seoul node test/test_importers.mjs   # Garmin FIT + RR text always; Train.Red / FatMaxxer parts when the private files are present
 node test/test_version.mjs         # APP_VERSION (app.js) == sw.js VERSION
 TZ=Asia/Seoul node test/test_align.mjs       # SmO2 clock-offset estimator (synthetic lags + real Train.Red file if present)
@@ -110,6 +111,7 @@ node test/ui_data.mjs              # generated RR + Train.Red-style files: repla
 node test/ui_sw.mjs                # service worker: install, offline start, update served like GitHub Pages, host error / slow host → cached app (own server)
 node test/ui_twolap.mjs            # the two-lap check through the UI with the demo strap: setup, prompts, card, CSV, band change on Home, Settings, one-time fixes
 node test/ui_warmup.mjs            # the speed to set, on the screen: the warm-up line on Home / Plan / setup cards, the large banner step by step in every mode, the voice, the speed field (demo strap, ≈ 2 min)
+node test/ui_places.mjs            # v1.1.36 in the UI: the place under each weekday, the 「장소」 field, a non-motorized run without speed cues, the card's place, the one-time calendar fix
 node test/ui_measured.mjs          # a measured result on record (the 10/11 check rebuilt): next test speed on Home / Plan / setup / live banner, speeds unchanged after one pass and +0.2 after the band change, the multi-day curve around LT1 (no LT2, apply closed, the reason)
 node test/ui_desc.mjs              # each session's description behind its title (Home, Plan, every setup card): closed, opens on a tap, stays open across repaints
 node test/ui_enfirst.mjs           # language "English + 한국어": English on top on every tab, setup card, the live screen and a dialog; back to Korean first without a reload

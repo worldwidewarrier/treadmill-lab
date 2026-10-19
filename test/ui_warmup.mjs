@@ -23,22 +23,25 @@ const setWeek = kind => page.evaluate(async kind => { const d = new Date(); d.se
 const planDays = async () => { await page.click('#nav button[data-view=home]'); await page.click('#nav button[data-view=plan]'); await page.waitForSelector('.plan-day'); return page.evaluate(() => [...document.querySelectorAll('.plan-day')].map(r => ({ wu: r.querySelector('.wu-line')?.textContent ?? null, nums: r.querySelector('.mono')?.textContent ?? '', run: (c => { c.querySelectorAll('.eve').forEach(e => e.remove()); return c.textContent; })(r.children[1].cloneNode(true)) }))); }; // Mon … Sun; run = the day's running lines (not the noon / evening exercise; since v1.1.27 they sit behind the title)
 const EASY = '워밍업 5분 · 7.0 km/h', LADDER = '워밍업 10분 · 7.5 → 8.5(4:00) → 9.5(7:00) km/h', CHECK = '워밍업 5분 · 걷기 5.5 → 7.0(0:30) km/h', MLSS = '워밍업 5분 · 7.5 → 8.5(2:00) km/h', STEP = '워밍업 5분 · 걷기 5.5 km/h';
 await setWeek(''); let days = await planDays(); let rows = days.map(d => d.wu);
-check('Plan, a ladder week: easy runs and the long run warm up at 7.0 · ladder 7.5 → 8.5 → 9.5 with its times · two-lap check walk 5.5 → 7.0 · Friday rest (no line, v1.1.35)', JSON.stringify(rows) === JSON.stringify([EASY, LADDER, EASY, CHECK, null, EASY, EASY]), JSON.stringify(rows));
-check('Plan: every day names one speed — easy 8.1, ladder 10.5, check 8.7, long run 7.5', /^133–140 bpm · 8\.1 km\/h$/.test(days[0].nums) && /· 10\.5 km\/h/.test(days[1].nums) && /· 8\.7 km\/h$/.test(days[3].nums) && /· 7\.5 km\/h$/.test(days[5].nums), JSON.stringify(days.map(d => d.nums)));
+check('Plan, a ladder week (v1.1.36): the unit days (Mon–Fri: track, hill, non-motorized) have no belt warm-up line · Saturday\'s two-lap check walk 5.5 → 7.0 · Sunday\'s long run 7.0', JSON.stringify(rows) === JSON.stringify([null, null, null, null, null, CHECK, EASY]), JSON.stringify(rows));
+check('Plan: the place is under the weekday (v1.1.36); the belt days name one speed — check 8.7, long run 7.5; the track ladder 10.5 with its 400-m pace 2:17; the unit easy days a heart rate only', /^128–133 bpm$/.test(days[0].nums) && /^154–160 bpm · 10\.5 km\/h · 400 m 2:17/.test(days[1].nums) && /^133–140 bpm$/.test(days[3].nums) && /^133–140 bpm · 8\.7 km\/h$/.test(days[5].nums) && /^133–140 bpm · 7\.5 km\/h$/.test(days[6].nums), JSON.stringify(days.map(d => d.nums)));
 check('Plan: no running line gives a speed as a range', days.every(d => !RANGE.test(d.run)), days.filter(d => RANGE.test(d.run)).map(d => (d.run.match(/.{0,25}\d\.\d\s*[–-]\s*\d+\.\d\s*km\/h/) || d.run.match(/.{0,25}\d\.\d에서 \d/))[0]).join(' | '));
 await noToast(); await shot('60-plan-warmup');
 const todayIdx = await page.evaluate(() => (new Date().getDay() + 6) % 7);
-await page.click('#nav button[data-view=home]'); await page.waitForSelector('#home-warmup');
+await page.click('#nav button[data-view=home]'); await page.waitForSelector('#view .card');
+if (!rows[todayIdx]) { const h = await page.evaluate(() => ({ wu: !!document.getElementById('home-warmup'), text: document.getElementById('view').textContent })); check('Home on a unit day (or rest): no belt warm-up line, the place on the numbers line (v1.1.36)', !h.wu && (/부대/.test(h.text) || /휴식/.test(h.text)), String(todayIdx)); }
+else {
 const home = await page.evaluate(() => { const w = document.getElementById('home-warmup'), card = w.closest('.card'); return { wu: w.textContent, nums: w.previousElementSibling.textContent, head: card.querySelector('.small.muted').getBoundingClientRect().height, lh: parseFloat(getComputedStyle(card.querySelector('.small.muted')).lineHeight) || 18, speed: card.querySelector('[data-action=go-live]')?.dataset.speed ?? null, text: card.textContent }; });
 check('Home: today\'s card has the same warm-up line as today\'s row of the plan, under a line with one speed', home.wu === rows[todayIdx] && !RANGE.test(home.nums) && / km\/h$/.test(home.nums), `${home.nums} / ${home.wu}`);
 check('Home: the Start button carries that speed into the session, and the day / week line is one line', home.speed != null && home.nums.endsWith(`${(+home.speed).toFixed(1)} km/h`) && home.head < 2 * home.lh, `data-speed ${home.speed}, head ${home.head}px`);
+}
 await noToast(); await shot('61-home-warmup');
 await setWeek('mlss'); rows = (await planDays()).map(d => d.wu);
-check('Plan, an MLSS-check week: Tuesday 7.5 → 8.5 at 2:00', rows[1] === MLSS && rows[3] === CHECK, JSON.stringify(rows));
+check('Plan, an MLSS-check week (v1.1.36): Saturday 7.5 → 8.5 at 2:00, Tuesday at the unit, Sunday an easy run 7.0', rows[5] === MLSS && rows[1] === null && rows[6] === EASY, JSON.stringify(rows));
 await setWeek('step'); rows = (await planDays()).map(d => d.wu);
 check('Plan, a step-test week: Saturday is the 5-min walk at 5.5', rows[5] === STEP, JSON.stringify(rows));
 await setWeek('blood'); rows = (await planDays()).map(d => d.wu);
-check('Plan, a blood-test week: Thursday has no run and no warm-up line, Tuesday is an easy run', rows[3] === null && rows[1] === EASY, JSON.stringify(rows));
+check('Plan, a blood-test week: Thursday has no run and no warm-up line, Tuesday an easy run at the unit, the Saturday check stays', rows[3] === null && rows[1] === null && rows[5] === CHECK, JSON.stringify(rows));
 await setWeek('');
 
 // ---- 2. live: the banner ----
@@ -80,8 +83,8 @@ check('easy run, voice: "워밍업 5분. 시속 7.0." → "본 속도로. 시속
 await stop();
 
 // a session opened from Home carries the plan's speed (here a long run: 70 min at 7.5); a speed belongs to its mode
-await page.click('#nav button[data-view=home]'); await page.waitForSelector('#home-warmup');
-await page.evaluate(() => { const b = document.createElement('button'); Object.assign(b.dataset, { action: 'go-live', mode: 'lt1', minutes: '70', speed: '7.5' }); document.getElementById('view').appendChild(b); b.click(); });
+await page.click('#nav button[data-view=home]'); await page.waitForSelector('#view .card');
+await page.evaluate(() => { const b = document.createElement('button'); Object.assign(b.dataset, { action: 'go-live', mode: 'lt1', minutes: '70', speed: '7.5', surface: 'treadmill' }); document.getElementById('view').appendChild(b); b.click(); });
 await page.waitForSelector('#sess-speed');
 check('opened from Home for a long run: the LT1 card has 70 min and 7.5 km/h in its fields', await page.inputValue('#lt1-min') === '70' && await page.inputValue('#sess-speed') === '7.5', `${await page.inputValue('#lt1-min')} ${await page.inputValue('#sess-speed')}`);
 st = await start(null, 30);

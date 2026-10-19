@@ -35,11 +35,11 @@ check('  the next three weeks are off, the 4th week is the check week', !checkDu
 check('  overdue (a later week) is still due', checkDueInWeek(b2.cadence, wk(6)));
 
 const off = weeklyPlan({ zones: Z, week: 2, verifySpeed: 8.9, verifyDue: false, verifyNext: '11/19' });
-const thu = off.days.find(d => d.day === 4);
-check('plan in an off week: Thursday is an easy run, saying when the next check is', thu.type === 'lt1' && /LT1 검사 없는 주/.test(thu.ko) && /11\/19/.test(thu.note.ko) && /11\/19/.test(thu.note.en) && thu.speed === 8.1, `${thu.ko} | ${thu.note.en.slice(0, 80)}`);
+const thu = off.days.find(d => d.day === 6); // v1.1.36: the check is on Saturday at the gym
+check('plan in an off week: Saturday is an easy run at the gym (+ optional StairMaster), saying when the next check is', thu.type === 'lt1' && /LT1 검사 없는 주/.test(thu.ko) && /11\/19/.test(thu.note.ko) && /11\/19/.test(thu.note.en) && /Saturday of the week of 11\/19/.test(thu.note.en) && /StairMaster/.test(thu.note.en) && thu.speed === 8.1 && thu.surface === 'treadmill', `${thu.ko} | ${thu.note.en.slice(0, 80)}`);
 const on = weeklyPlan({ zones: Z, week: 2, verifySpeed: 8.9, verifyDue: true });
-check('plan in a check week: Thursday is the two-lap check at 8.9 (as before)', on.days.find(d => d.day === 4).type === 'verify' && on.days.find(d => d.day === 4).speed === 8.9);
-check('  the default (no cadence given) is the check, unchanged behaviour', weeklyPlan({ zones: Z, week: 2, verifySpeed: 8.9 }).days.find(d => d.day === 4).type === 'verify');
+check('plan in a check week: Saturday is the two-lap check at 8.9 (v1.1.36)', on.days.find(d => d.day === 6).type === 'verify' && on.days.find(d => d.day === 6).speed === 8.9);
+check('  the default (no cadence given) is the check, unchanged behaviour', weeklyPlan({ zones: Z, week: 2, verifySpeed: 8.9 }).days.find(d => d.day === 6).type === 'verify');
 const blood = weeklyPlan({ zones: Z, week: 2, verifyDue: false, kinds: ['blood'] });
 check('  a blood-test week stays a rest morning', blood.days.find(d => d.day === 4).type === 'rest');
 

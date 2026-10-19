@@ -131,3 +131,7 @@ details.desc > summary h3 { margin-bottom: 2px; }
 details.desc > summary .chev { flex: none; width: 26px; height: 26px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 50%; color: var(--muted); font-size: 0.8rem; line-height: 1; transition: transform 0.15s ease; }
 details.desc[open] > summary .chev { transform: rotate(180deg); }
 details.desc > .desc-body { margin: 6px 0 2px; padding-left: 10px; border-left: 2px solid var(--line); }
+
+/* v1.1.36: where a day is run (Plan: under the weekday; Home: at the front of the numbers line) */
+.place-tag { font-weight: 600; }
+.plan-day .dow .place-tag { display: inline-block; margin-top: 2px; font-size: 0.72rem; }

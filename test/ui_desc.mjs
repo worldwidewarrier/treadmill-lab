@@ -16,7 +16,7 @@ await page.goto(base, { waitUntil: 'networkidle' }); await page.waitForSelector(
 // ---- Home
 const H = '#view details.desc[data-key="home-today"]';
 let st = await page.evaluate(H => { const d = document.querySelector(H); const s = d?.querySelector('summary'); return d && { open: d.open, head: s.textContent, wu: !!s.querySelector('#home-warmup'), mono: !!s.querySelector('.mono'), body: d.querySelector('.desc-body').textContent }; }, H);
-check('Home: today\'s description is closed; the title, the numbers and the warm-up line are in the part that shows', st && st.open === false && st.wu && st.mono && /km\/h/.test(st.head) && st.body.length > 40, JSON.stringify(st && { open: st.open, head: st.head.slice(0, 80) }));
+check('Home: today\'s description is closed; the title, the numbers (and on a belt day the warm-up line) are in the part that shows', st && st.open === false && st.mono && (/km\/h/.test(st.head) ? st.wu : /부대|휴식/.test(st.head)) && st.body.length > 40, JSON.stringify(st && { open: st.open, head: st.head.slice(0, 80) }));
 check('…the description (the long note, noon · evening) is not on screen', await visible(`${H} .desc-body p`) === false);
 await page.screenshot({ path: `${SHOTS}/80-desc-home-closed.png` });
 await page.click(`${H} > summary h3`); await page.waitForTimeout(150);
@@ -32,7 +32,7 @@ check('the Start button is outside the description (always there)', !!startOk &&
 // ---- Plan
 await page.click('#nav button[data-view=plan]'); await page.waitForSelector('.plan-day'); await noToast();
 const rows = await page.evaluate(() => [...document.querySelectorAll('.plan-day')].map(r => { const d = r.querySelector('details.desc'); return { has: !!d, open: d?.open ?? null, wuIn: !!d?.querySelector('summary .wu-line'), monoIn: !!d?.querySelector('summary .mono'), body: d?.querySelector('.desc-body')?.textContent.length ?? 0, h: r.getBoundingClientRect().height }; }));
-check('Plan: every day with a note has it behind its title, closed; the numbers and the warm-up line show', rows.filter(r => r.has).length >= 6 && rows.every(r => !r.has || (r.open === false && r.monoIn)) && rows.filter(r => r.wuIn).length >= 6, JSON.stringify(rows.map(r => [r.has, r.open, r.wuIn, r.body])));
+check('Plan: every day with a note has it behind its title, closed; the numbers and the warm-up line show', rows.filter(r => r.has).length >= 6 && rows.every(r => !r.has || (r.open === false && r.monoIn)) && rows.some(r => r.wuIn), JSON.stringify(rows.map(r => [r.has, r.open, r.wuIn, r.body])));
 check('…each closed day row is short (≤ 160 px: title, numbers, warm-up line)', rows.every(r => r.h <= 160), JSON.stringify(rows.map(r => Math.round(r.h))));
 await page.screenshot({ path: `${SHOTS}/82-desc-plan-closed.png`, fullPage: true });
 const first = '.plan-day details.desc'; await page.click(`${first} > summary b`); await page.waitForTimeout(150);
