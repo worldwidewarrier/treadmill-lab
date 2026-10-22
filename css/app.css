@@ -135,3 +135,10 @@ details.desc > .desc-body { margin: 6px 0 2px; padding-left: 10px; border-left: 
 /* v1.1.36: where a day is run (Plan: under the weekday; Home: at the front of the numbers line) */
 .place-tag { font-weight: 600; }
 .plan-day .dow .place-tag { display: inline-block; margin-top: 2px; font-size: 0.72rem; }
+
+/* v1.1.37 — today's checklist */
+.chk-list { display: flex; flex-direction: column; gap: 6px; }
+.chk-row { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 10px 12px; min-height: 44px; }
+.chk-row .box { flex: 0 0 22px; height: 22px; border: 2px solid currentColor; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; font-weight: 700; opacity: .7; }
+.chk-row.on .box { opacity: 1; background: var(--z2, #3a8); border-color: transparent; color: #fff; }
+.chk-row.on { opacity: .75; }
