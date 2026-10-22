@@ -11,7 +11,7 @@ import { importFile } from './importers.js';
 import { liveChart, timelineChart, stepTestChart, trendChart } from './charts.js';
 
 // ---------- defaults ----------
-export const APP_VERSION = '1.1.38'; // keep in sync with sw.js VERSION
+export const APP_VERSION = '1.1.40'; // keep in sync with sw.js VERSION
 const DEFAULTS = {
   profile: { birth: '1997-07-21', restHr: 52, restLactate: 0.8, restLactateAt: '2026-10-09', maxHr: 188, maxHrMode: 'tanaka', lang: 'both', theme: 'system' }, // restLactateAt: when the baseline was measured (a monthly reminder to re-measure)
   treadmill: { model: 'LTSXL', minSpeed: 0.8, maxSpeed: 18, speedStep: 0.1, maxIncline: 15, inclineStep: 0.5 },
@@ -287,29 +287,131 @@ function showRenderError(e) {
 document.getElementById('nav').addEventListener('click', e => { const b = e.target.closest('button'); if (b) navigate(b.dataset.view); });
 $('#view').addEventListener('click', onViewClick);
 
-// ---------- TODAY'S CHECKLIST (v1.1.37) ----------
-// Owner: "다른 운동 체크리스트 · 자유운동과 세션 둘 중 하나만 해도 체크". Running is ticked by the app as soon as any real session of today
-// is finished — the prescribed session or a free run (lactate checks, Free mode, a step test …), whichever; a tap ticks or unticks it by hand.
-// The other exercise of the day is a short list of its own. Stored per date in settings.checks (kept 60 days).
-const OTHER_EX = { 1: [['홈 세션 (가동성·코어)', 'Home session (mobility · core)'], ['추가 운동 (버드독·월 싯)', 'Extra (bird dog · wall sit)']], 2: [['근력 A', 'Strength A']], 3: [['걷기 20분', 'Walk 20 min'], ['플라이오', 'Plyometrics']], 4: [['근력 B', 'Strength B']], 5: [['폼롤링·카프 홀드', 'Foam roll · calf holds'], ['플라이오', 'Plyometrics']], 6: [['천국의 계단 (선택)', 'StairMaster (optional)']], 0: [['경사 걷기 (선택)', 'Incline walk (optional)']] };
-const todayKey = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
-const sameDay = (ms, key) => { if (!Number.isFinite(ms)) return false; const d = new Date(ms); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` === key; };
-function dayChecks(key) { const c = A.settings.checks || (A.settings.checks = {}); return c[key] || (c[key] = { run: null, o: {} }); }
-/** Running done today = any finished real session (not the demo strap) — session or free run — unless unticked by hand. */
-function runDone(all, key) { const ck = dayChecks(key); if (ck.run === true || ck.run === false) return ck.run; return all.some(s => s.final && s.sourceKind !== 'demo' && sameDay(s.startedAt, key)); }
-function checklistCard(today, all) {
-  const key = todayKey(); const dow = new Date().getDay(); const ck = dayChecks(key); const rest = today && today.type === 'rest';
-  const row = (id, on, ko, en) => `<button class="chk-row${on ? ' on' : ''}" data-action="chk" data-id="${id}"><span class="box" aria-hidden="true">${on ? '✓' : ''}</span><span>${esc(ko)}<span class="en">${esc(en)}</span></span></button>`;
-  const run = rest ? '' : row('run', runDone(all, key), '러닝 (세션 또는 자유 달리기)', 'Run (session or free run)');
-  const other = (OTHER_EX[dow] || []).map((x, i) => row('o' + i, !!ck.o[i], x[0], x[1])).join('');
-  return `<h2>오늘 체크 <span class="en">Today's checks</span></h2><div class="card chk-list">${run}${other}</div>`;
+// ---------- TODAY'S EXERCISE LIST (v1.1.39) ----------
+// Owner (10/23): "러닝 및 그 외 운동 세부 리스트를 제시하여 각각의 운동을 체크 · 이를 수집하여 다음 운동에 반영". Every part of the day is a row:
+// tap = done. Rows with a number (kg, reps, contacts, minutes) keep what was done; the next time the same exercise comes up its target is
+// computed from the last log — done with the target → the step up (lower lifts +5 kg, upper +2.5 kg, chin-ups +1 rep, plyometric contacts
+// +10 to 100, StairMaster +5 min to 20), not done → the same target again. Running rows tick themselves once a real session (or free run) of
+// today is finished; the run's RPE (session end, or typed here) shapes the next easy day. Stored in settings.log[date] (kept 120 days).
+const EX = {
+  r_wu: ['워밍업', 'Warm-up'], r_main: ['본 구간', 'Main part'], r_str: ['스트라이드 4–6 × 20초', 'Strides 4–6 × 20 s'], r_cd: ['쿨다운 걷기', 'Cool-down walk'], r_rpe: ['RPE (0–10)', 'RPE (0–10)', 'rpe'],
+  mob: ['가동성 5분', 'Mobility 5 min'], deadbug: ['데드버그 3×8/측', 'Dead bug 3 × 8/side'], splank: ['사이드 플랭크 2×30초/측', 'Side plank 2 × 30 s/side'], pallof: ['팔로프 2×10/측', 'Pallof 2 × 10/side'], foot: ['발 코어 5분', 'Foot core 5 min'],
+  birddog: ['버드독 2×8/측', 'Bird dog 2 × 8/side'], hollow: ['할로우 2×20초', 'Hollow 2 × 20 s'], sls: ['한발 서기 30초×2/측', 'Single-leg stand 30 s × 2/side'], wallsit: ['월 싯 2분×4', 'Wall sit 2 min × 4'],
+  squat: ['스쿼트 3×3–6', 'Squat 3 × 3–6', 'kg', 5], bench: ['벤치 3×8–12', 'Bench 3 × 8–12', 'kg', 2.5], chin: ['친업 3세트', 'Chin-up 3 sets', 'reps', 1],
+  dl: ['데드리프트 3×3–6', 'Deadlift 3 × 3–6', 'kg', 5], ohp: ['OHP 3×8–12', 'OHP 3 × 8–12', 'kg', 2.5], row: ['로우 3×8–12', 'Row 3 × 8–12', 'kg', 2.5],
+  rdl: ['RDL 3×8–12', 'RDL 3 × 8–12', 'kg', 5], bulg: ['불가리안 3×8/측', 'Bulgarian 3 × 8/side', 'kg', 2.5], facepull: ['페이스 풀 3×12', 'Face pull 3 × 12'], carry: ['파머스 캐리 2×40 m', 'Farmer\'s carry 2 × 40 m', 'kg', 2.5], calf: ['앉은 카프 3×15', 'Seated calf 3 × 15', 'kg', 2.5],
+  walk: ['걷기 20분', 'Walk 20 min'], incline: ['경사 걷기 20분', 'Incline walk 20 min'], plyo: ['플라이오 (접지)', 'Plyometrics (contacts)', 'contacts', 10], foam: ['폼롤링 5분', 'Foam roll 5 min'], calfhold: ['카프 홀드 5×45초', 'Calf holds 5 × 45 s'],
+  stairs: ['천국의 계단 (선택)', 'StairMaster (optional)', 'min', 5],
+  bw_split: ['스플릿 스쿼트 (다리당)', 'Split squat (per leg)', 'reps', 1], bw_push: ['푸시업', 'Push-up', 'reps', 1], bw_chin: ['친업', 'Chin-up', 'reps', 1],
+};
+const UNIT = { kg: 'kg', reps: '회', contacts: '회', min: '분', rpe: '' };
+const CAP = { plyo: 100, stairs: 20 };
+const START = { stairs: 10, rpe: null };
+const OTHER_DAY = { 1: ['mob', 'deadbug', 'splank', 'pallof', 'foot', 'birddog', 'hollow', 'sls', 'wallsit'], 2: ['squat', 'bench', 'chin', 'rdl', 'pallof', 'carry', 'calf', 'sls'], 3: ['walk', 'plyo', 'incline'], 4: ['dl', 'ohp', 'row', 'bulg', 'facepull', 'carry', 'calf', 'sls'], 5: ['foam', 'calfhold', 'mob', 'plyo', 'foot', 'wallsit'], 6: ['stairs'], 0: ['incline'] };
+// ---------- THE WEEK BY QUOTA (v1.1.40) ----------
+// Owner (10/23): "시간에 맞춰 하기 어려움 · 변수가 많음 · 주중 부대 근처, 주말 헬스장 · 실행 가능성 높게 · 데이터로 주기적 개선". No clock times and no fixed
+// weekdays on weekdays: a weekly quota (easy runs, one hard session, short bodyweight strength right after a run) done on whichever weekday
+// fits; Home shows what is left and the session that fits today. Rules kept: hard only Tue–Thu and ≥ 48 h after another hard session, at most
+// 6 running days. Weekends stay fixed at the gym (Sat the check + barbell, Sun the long run). A minimum version always counts (easy 20 min;
+// one set each). Every Sunday/Monday the last two weeks' completion suggests a change: < 50 % → one fewer, ≥ 90 % twice → one more.
+const QDEF = { easy: [2, 4, 3], hard: [0, 1, 1], str: [1, 3, 2] };
+const quota = () => { const q = A.settings.quota || {}; const o = {}; for (const k in QDEF) o[k] = Number.isFinite(q[k]) ? q[k] : QDEF[k][2]; return o; };
+const mondayOf = d => { const x = new Date(d); x.setHours(12, 0, 0, 0); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; };
+const isHardSess = s => s.type === 'lt2';
+/** What was done on each day of the week starting at monday (Date): runs by kind and strength, from real sessions and the log. */
+function weekDone(all, monday) {
+  const out = { easy: 0, hard: 0, str: 0, runDays: 0, hardDays: [], days: {} };
+  for (let i = 0; i < 7; i++) { const d = new Date(monday); d.setDate(d.getDate() + i); const k = dkey(d); const L = (A.settings.log || {})[k] || {};
+    const ss = all.filter(s => s.final && s.sourceKind !== 'demo' && sameDay(s.startedAt, k) && s.type !== 'test');
+    let kind = ss.some(isHardSess) ? 'hard' : ss.length ? 'easy' : (L.r_main && L.r_main.d ? (L.kind || 'easy') : null);
+    if (L.r_main && L.r_main.d === false) kind = null;
+    const wk = i < 5; if (kind) { out.runDays++; if (wk) out[kind]++; if (kind === 'hard') out.hardDays.push(k); }
+    if (wk && ['bw_split', 'bw_push', 'bw_chin'].some(id => L[id] && L[id].d)) out.str++;
+    out.days[k] = kind; }
+  return out;
 }
+/** The session that fits today: weekends = the plan's day; weekdays = hard if it is due and allowed, else an easy run while the quota lasts, else rest. */
+function pickToday(plan, all) {
+  const now = new Date(); const dow = now.getDay(); const planDay = plan.days.find(d => d.day === dow);
+  if (dow === 0 || dow === 6) return { ...planDay, kind: null };
+  const q = quota(); const w = weekDone(all, mondayOf(now)); const key = dkey(now); const doneToday = w.days[key];
+  const tue = plan.days.find(d => d.day === 2); const easyT = plan.days.find(d => d.day === 3);
+  const hardPossible = tue && tue.type === 'lt2' && q.hard > 0;
+  const recentHard = w.hardDays.some(k => k !== key && (new Date(key) - new Date(k)) / 864e5 < 2);
+  const rest = (ko, en) => ({ day: dow, type: 'rest', kind: null, ko, en, minutes: 0, hr: null, speed: null, place: 'unit' });
+  if (doneToday) return { ...(doneToday === 'hard' ? tue : easyT), day: dow, kind: doneToday };
+  if (w.runDays >= 6) return rest('휴식 (이번 주 6일 달림)', 'Rest (6 running days this week)');
+  if (hardPossible && w.hard < q.hard && dow >= 2 && dow <= 4 && !recentHard) return { ...tue, day: dow, kind: 'hard' };
+  if (w.easy < q.easy) return { ...easyT, day: dow, kind: 'easy' };
+  return rest('휴식 (이번 주 평일 할당 완료)', 'Rest (weekday quota done)');
+}
+function weekStrip(plan, all) {
+  const q = quota(); const w = weekDone(all, mondayOf(new Date())); const tue = plan.days.find(d => d.day === 2); const hardQ = tue && tue.type === 'lt2' ? q.hard : 0;
+  const it = (ko, en, n, m) => `<span class="wk-it${n >= m ? ' on' : ''}">${ko} ${n}/${m}<span class="en">${en} ${n}/${m}</span></span>`;
+  return `<div class="wk-strip">${it('쉬운 런', 'Easy', w.easy, q.easy)}${hardQ ? it('고강도', 'Hard', w.hard, hardQ) : ''}${it('근력', 'Strength', w.str, q.str)}</div>`;
+}
+/** Every Sunday and Monday: completion of the last two finished weeks (or this one on Sunday) → one suggested change per quota. */
+function quotaReview(plan, all) {
+  const now = new Date(); const dow = now.getDay(); if (dow !== 0 && dow !== 1) return '';
+  const q = quota(); const m0 = mondayOf(now); if (dow === 1) m0.setDate(m0.getDate() - 7); const m1 = new Date(m0); m1.setDate(m1.getDate() - 7);
+  const a = weekDone(all, m0), b = weekDone(all, m1); const out = [];
+  const name = { easy: ['쉬운 런', 'easy runs'], str: ['근력', 'strength'] };
+  for (const k of ['easy', 'str']) { const r = (a[k] + b[k]) / (2 * q[k]); const [lo, hi] = QDEF[k];
+    if (r < 0.5 && q[k] > lo) out.push({ k, to: q[k] - 1, ko: `${name[k][0]} 2주 실행 ${Math.round(r * 100)} % → 주 ${q[k]}회 → ${q[k] - 1}회`, en: `${name[k][1]} done ${Math.round(r * 100)} % over 2 weeks → ${q[k]} → ${q[k] - 1} a week` });
+    else if (a[k] >= q[k] && b[k] >= q[k] && q[k] < hi) out.push({ k, to: q[k] + 1, ko: `${name[k][0]} 2주 연속 완료 → 주 ${q[k]}회 → ${q[k] + 1}회`, en: `${name[k][1]} done two weeks running → ${q[k]} → ${q[k] + 1} a week` }); }
+  if (!out.length) return '';
+  return `<h2>주간 조정 <span class="en">Weekly adjustment</span></h2><div class="card stack">${out.map(o => `<div class="row between"><span class="small">${esc(o.ko)}<span class="en">${esc(o.en)}</span></span><button class="compact primary" data-action="quota" data-k="${o.k}" data-to="${o.to}">적용 <span class="en">Apply</span></button></div>`).join('')}</div>`;
+}
+/** Other exercise of today: weekdays = the bodyweight circuit right after the run while the strength quota lasts (or once done today); Saturday = barbell + StairMaster; Sunday none. */
+function otherRows(today, all, key) {
+  const dow = new Date().getDay(); if (dow === 6) return ['squat', 'dl', 'ohp', 'stairs']; if (dow === 0) return [];
+  const L = dayLog(key); const doneToday = ['bw_split', 'bw_push', 'bw_chin'].some(id => L[id] && L[id].d);
+  const w = weekDone(all, mondayOf(new Date())); return (doneToday || w.str < quota().str) ? ['bw_split', 'bw_push', 'bw_chin'] : [];
+}
+
+const dkey = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const todayKey = () => dkey(new Date());
+const sameDay = (ms, key) => Number.isFinite(ms) && dkey(new Date(ms)) === key;
+function dayLog(key) { const L = A.settings.log || (A.settings.log = {}); return L[key] || (L[key] = {}); }
+/** The last logged entry of an exercise before today. */
+function lastOf(id, key) { const L = A.settings.log || {}; const ks = Object.keys(L).filter(k => k < key && L[k][id] && (L[k][id].d || Number.isFinite(L[k][id].v))).sort(); return ks.length ? { date: ks[ks.length - 1], ...L[ks[ks.length - 1]][id] } : null; }
+/** Today's target from the last log: done → one step up (capped), not done → the same; none yet → the start value or empty. */
+function targetOf(id, key, plan) {
+  const ex = EX[id]; if (!ex || !ex[2] || ex[2] === 'rpe') return null; const last = lastOf(id, key);
+  if (!last || !Number.isFinite(last.v)) return id === 'plyo' && plan && Number.isFinite(plan.plyoContacts) ? plan.plyoContacts : (START[id] ?? null);
+  const up = last.d ? last.v + ex[3] : last.v; return CAP[id] ? Math.min(CAP[id], up) : up;
+}
+const realToday = (all, key) => all.filter(s => s.final && s.sourceKind !== 'demo' && sameDay(s.startedAt, key));
+function runRows(today) { if (!today || today.type === 'rest') return []; return ['r_wu', 'r_main', ...(today.day === 1 ? ['r_str'] : []), 'r_cd', 'r_rpe']; }
+/** The latest run RPE before today (session RPE or typed here) and whether that day was easy. */
+function lastRunRpe(all, key) {
+  const L = A.settings.log || {}; let best = null;
+  for (const s of all) { if (!s.final || s.sourceKind === 'demo' || !Number.isFinite(s.rpe) || sameDay(s.startedAt, key) || dkey(new Date(s.startedAt)) > key) continue; const k = dkey(new Date(s.startedAt)); if (!best || k > best.date) best = { date: k, rpe: s.rpe, easy: s.type === 'lt1' || s.type === 'free' }; }
+  for (const k of Object.keys(L)) { if (k >= key || !L[k].r_rpe || !Number.isFinite(L[k].r_rpe.v)) continue; if (!best || k > best.date) best = { date: k, rpe: L[k].r_rpe.v, easy: true }; }
+  return best;
+}
+function exDone(id, key, all) { const e = dayLog(key)[id]; if (e && (e.d === true || e.d === false)) return e.d; if (id.startsWith('r_') && id !== 'r_rpe') return realToday(all, key).length > 0; if (id === 'r_rpe') return Number.isFinite(e && e.v) || realToday(all, key).some(s => Number.isFinite(s.rpe)); return false; }
+function checklistCard(today, all, plan) {
+  const key = todayKey(); const dow = new Date().getDay(); const log = dayLog(key);
+  const row = id => { const ex = EX[id]; const on = exDone(id, key, all); const e = log[id] || {}; const kind = ex[2]; const tgt = targetOf(id, key, plan); const last = kind ? lastOf(id, key) : null;
+    const sessRpe = id === 'r_rpe' ? (realToday(all, key).find(s => Number.isFinite(s.rpe)) || {}).rpe : undefined; const val = Number.isFinite(e.v) ? e.v : (Number.isFinite(sessRpe) ? sessRpe : '');
+    const hint = kind && kind !== 'rpe' ? `${last ? `지난 ${last.v ?? '–'}${UNIT[kind]}${last.d ? ' ✓' : ''} · ` : ''}${tgt != null ? `오늘 ${tgt}${UNIT[kind]}` : '첫 기록'}` : '';
+    const inp = kind ? `<input class="ex-val" type="number" inputmode="decimal" step="${kind === 'kg' ? 0.5 : 1}" data-id="${id}" value="${val}" placeholder="${tgt ?? ''}" aria-label="${esc(ex[0])}">` : '';
+    return `<div class="chk-row${on ? ' on' : ''}"><button class="chk-tap" data-action="chk" data-id="${id}"><span class="box" aria-hidden="true">${on ? '✓' : ''}</span><span>${esc(ex[0])}<span class="en">${esc(ex[1])}</span>${hint ? `<span class="small muted ex-hint">${esc(hint)}</span>` : ''}</span></button>${inp}</div>`; };
+  A.homeToday = today; const rr = runRows(today); const lr = lastRunRpe(all, key);
+  const flag = rr.length && lr && lr.easy && lr.rpe >= 5 && today && today.type === 'lt1' ? `<p class="notice warn small" style="margin:0 0 6px">지난 쉬운 런 RPE ${lr.rpe} (≥ 5) → 오늘은 밴드 하단, 속도 −0.3 <span class="en">Last easy run RPE ${lr.rpe} (≥ 5) → today at the low end, speed −0.3</span></p>` : '';
+  const other = otherRows(today, all, key);
+  const minNote = other.some(id => id.startsWith('bw_')) ? `<p class="small muted" style="margin:2px 0 4px">달리기 직후 러닝복 그대로 · 각 1세트만 해도 완료 <span class="en">Right after the run, in running kit · one set each counts</span></p>` : '';
+  return `<h2>오늘 체크 <span class="en">Today's checks</span></h2><div class="card chk-list">${rr.length ? `<div class="small muted">러닝 <span class="en">Run</span></div>${flag}${rr.map(row).join('')}` : ''}${other.length ? `<div class="small muted" style="margin-top:6px">다른 운동 <span class="en">Other exercise</span></div>${minNote}${other.map(row).join('')}` : ''}</div>`;
+}
+function saveLog() { const L = A.settings.log; const keep = Object.keys(L).sort().slice(-120); for (const k of Object.keys(L)) if (!keep.includes(k)) delete L[k]; return saveSettings(); }
 function toggleCheck(id) {
-  const key = todayKey(); const ck = dayChecks(key);
-  if (id === 'run') ck.run = !runDone(A.sessions, key); else { const i = +id.slice(1); ck.o[i] = !ck.o[i]; }
-  const keep = Object.keys(A.settings.checks).sort().slice(-60); for (const k of Object.keys(A.settings.checks)) if (!keep.includes(k)) delete A.settings.checks[k];
-  saveSettings().then(render);
+  const key = todayKey(); const e = dayLog(key)[id] || (dayLog(key)[id] = {}); const on = exDone(id, key, A.sessions); e.d = !on;
+  if (id === 'r_main' && e.d && A.homeToday && A.homeToday.kind) dayLog(key).kind = A.homeToday.kind;
+  if (e.d && !Number.isFinite(e.v)) { const t = targetOf(id, key, A.planCache || A.homePlan); if (Number.isFinite(t)) e.v = t; } // checked without typing = the target was done
+  saveLog().then(render);
 }
+function setExValue(id, raw) { const key = todayKey(); const v = parseFloat(String(raw).replace(',', '.')); const e = dayLog(key)[id] || (dayLog(key)[id] = {}); if (Number.isFinite(v)) { e.v = v; if (e.d !== false) e.d = true; } else delete e.v; saveLog().then(render); }
 
 // ---------- HOME ----------
 async function renderHome() {
@@ -318,14 +420,14 @@ async function renderHome() {
   const all = await store.listSessions(); const ins = assessRecent(all, z, A.settings.zones.updatedAt, { restLactateAt: A.settings.profile.restLactateAt });
   const bf = bandFinder(all, A.settings.zones); A.bandFinder = bf;
   const plan = z ? weeklyPlan(planArgs(z, ins, all, bf)) : null; const pc = planCtx();
-  const todayIdx = new Date().getDay(); const today = plan ? plan.days.find(d => d.day === todayIdx) : null;
+  const todayIdx = new Date().getDay(); const today = plan ? pickToday(plan, all) : null;
   let html = ''; // v1.1.38: Home = today's session + today's checks (thresholds live in Plan / Settings)
   if (false) html += `<div class="card accent"><div class="thr-card">
       <div class="box"><div class="small muted">${t('lt1')}</div><div class="v">${n0(z.lt1Hr)}<small> bpm</small></div><div class="small">${Number.isFinite(z.lt1Speed) ? n1(z.lt1Speed) + ' km/h' : ''}</div></div>
       <div class="box"><div class="small muted">${t('lt2')}</div><div class="v">${n0(z.lt2Hr)}<small> bpm</small></div><div class="small">${Number.isFinite(z.lt2Speed) ? n1(z.lt2Speed) + ' km/h' : ''}</div></div></div>
 </div>`;
   if (!z) html += `<h2>${t('zones_title')}</h2><div class="card"><p>${t('no_zones')}</p><div class="grid2"><button class="primary" data-action="go-test">${t('start_test')}</button><button data-action="import">${t('import_file')}</button></div></div>`;
-  html += `<h2>${t('today')}</h2>`;
+  html += quotaReview(plan || { days: [] }, all) + `<h2>${t('today')}</h2>` + (plan ? weekStrip(plan, all) : '');
   if (today) {
     const hrTxt = today.hr ? `${today.hr.hrLo}–${today.hr.hrHi} bpm` : ''; const wuTxt = dayWarmup(today, z); // the warm-up speed on its own line (v1.1.26)
     const todayHead = `<h3 class="type-${today.type}">${esc(today.ko)}<span class="en">${esc(today.en)}</span></h3><div class="mono">${placeTag(today)}${today.place ? ' · ' : ''}${today.minutes ? `${today.minutes} min` : '–'}${hrTxt ? ` · ${hrTxt}` : ''}${Array.isArray(today.speed) ? ` · ${today.speed[0].toFixed(1)}${today.speed[1] !== today.speed[0] ? `–${today.speed[1].toFixed(1)}` : ''} km/h` : Number.isFinite(today.speed) ? ` · ${today.speed.toFixed(1)} km/h` : ''}</div>${wuTxt ? `<div class="mono wu-line" id="home-warmup">${esc(wuTxt)}</div>` : ''}`;
@@ -333,7 +435,8 @@ async function renderHome() {
     html += `<div class="card">${descBlock('home-today', todayHead, todayBody)}
       <div class="grid1" style="margin-top:10px;display:grid">${today.type === 'rest' ? `<button disabled>${t('start_session')}</button>` : today.type === 'test' ? `<button class="primary big" data-action="go-test">${t('start_test')}</button>` : `<button class="primary big" data-action="go-live" data-mode="${today.type === 'lt2' || today.type === 'tempo' ? 'lt2' : today.type === 'verify' ? 'verify' : 'lt1'}" data-minutes="${today.minutes}" data-surface="${today.surface || 'treadmill'}"${Number.isFinite(today.speed) ? ` data-speed="${today.speed}"` : ''}${today.purpose ? ` data-purpose="${today.purpose}"` : ''}${today.structure ? ` data-structure="${esc(JSON.stringify(today.structure))}"` : ''}>${t('start_session')}</button>`}</div></div>`;
   } else html += `<div class="card"><p class="muted">${t('no_zones')}</p></div>`;
-  html += checklistCard(today, all);
+  if (today && today.type !== 'rest' && today.type !== 'test' && today.kind) html += `<div style="margin:-6px 0 12px"><button class="ghost block" data-action="go-live" data-mode="lt1" data-minutes="20" data-surface="${today.surface || 'treadmill'}">바쁜 날: 쉬운 런 20분 (이것도 완료) <span class="en">Busy day: easy 20 min (counts as done)</span></button></div>`;
+  A.homePlan = plan; html += checklistCard(today, all, plan);
   // the weekly LT1 verification run (v1.1.17): this week's test speed from the latest two-lap result; the band moves after two consecutive results
   if (z && bf.change) html += `<h2>${bf.cadence && bf.cadence.mode === 'maintenance' ? 'LT1 검증 (4주마다) <span class="en">LT1 check (every 4 weeks)</span>' : '주간 LT1 검증 <span class="en">Weekly LT1 check</span>'}</h2><div class="card"><p class="small"><b class="mono">${Number.isFinite(bf.nextSpeed) ? bf.nextSpeed.toFixed(1) + ' km/h' : '–'}</b></p>${bf.change ? `<button class="primary block" style="margin-top:8px" data-action="apply-band">범위 반영: ${esc(bf.change.ko)} <span class="en">Apply the band change</span></button>` : ''}<div class="row" style="margin-top:8px"><button class="compact" data-action="go-live" data-mode="verify"${Number.isFinite(bf.nextSpeed) ? ` data-speed="${bf.nextSpeed}"` : ''}>${t('mode_verify')} ›</button></div></div>`;
   // the MLSS checks (v1.1.35): two passes at the same speed before the ladder speed rises; the end lactate of a pass/hold is the ladder's target
@@ -924,6 +1027,7 @@ async function onSettingsChange(e) {
   if (path === 'profile.lang' || path === 'profile.maxHrMode' || path === 'profile.birth') render();
 }
 $('#view').addEventListener('change', onSettingsChange);
+$('#view').addEventListener('change', e => { const i = e.target.closest && e.target.closest('.ex-val'); if (i) setExValue(i.dataset.id, i.value); });
 
 // ---------- click actions ----------
 async function onViewClick(e) {
@@ -931,6 +1035,7 @@ async function onViewClick(e) {
   switch (act) {
     case 'go-test': A.live.mode = 'test'; navigate('live'); break;
     case 'chk': toggleCheck(b.dataset.id); break;
+    case 'quota': { A.settings.quota = { ...quota(), [b.dataset.k]: +b.dataset.to }; await saveSettings(); render(); toast('주간 할당을 바꿨습니다 / weekly quota changed', 2000); break; }
     case 'go-live': A.live.mode = b.dataset.mode || 'lt1'; if (b.dataset.minutes && A.live.mode !== 'verify') A.live.minutes = +b.dataset.minutes; if (A.live.mode === 'verify') { A.live.purpose = b.dataset.purpose === 'mlss' ? 'mlss' : 'lt1'; A.live.laps = { ...A.settings.laps, ...(A.live.purpose === 'mlss' ? { lap2Sec: 1200 } : {}) }; } if (A.live.mode === 'lt2') { let st = null; try { st = b.dataset.structure ? JSON.parse(b.dataset.structure) : null; } catch (e) { st = null; } A.live.lt2 = st || lt2Structure(planWeek()); } A.live.speed = b.dataset.speed ? +b.dataset.speed : null; A.live.surface = SURFACES.includes(b.dataset.surface) ? b.dataset.surface : 'treadmill'; navigate('live'); break; // the speed field opens with the plan's speed for this session (v1.1.26: also the easy run, the long run and the ladder — the session names that speed), not with the last session's
     case 'fill-calendar': confirmBox('주 달력을 10/10 계획(10/12 시작)으로 바꿀까요? 지금 적힌 줄은 지워집니다. / Replace the week calendar with the Oct 10 plan (start 10/12)? The current lines are discarded.', async () => { A.settings.plan.startDate = PLAN_START; A.settings.plan.weekOffset = 0; A.settings.plan.calendar = DEFAULT_CALENDAR; await saveSettings(); render(); toast('주 달력을 채웠습니다 / calendar filled in', 2000); }); break;
     case 'save-mlss-lactate': { const la = +b.dataset.la; if (!Number.isFinite(la)) break; A.settings.zones.mlssLactate = la; await saveSettings(); toast(`MLSS 젖산 ${la} 저장 — 사다리 목표 ${(la - 0.5).toFixed(1)}–${(la + 0.5).toFixed(1)} / saved: ladder target`, 4000); if (A.view === 'analysis' && A.param) await renderSessionDetail(A.param); else render(); break; }

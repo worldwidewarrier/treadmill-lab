@@ -142,3 +142,14 @@ details.desc > .desc-body { margin: 6px 0 2px; padding-left: 10px; border-left: 
 .chk-row .box { flex: 0 0 22px; height: 22px; border: 2px solid currentColor; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; font-weight: 700; opacity: .7; }
 .chk-row.on .box { opacity: 1; background: var(--z2, #3a8); border-color: transparent; color: #fff; }
 .chk-row.on { opacity: .75; }
+/* v1.1.39 — exercise rows with a value */
+.chk-row { padding: 0; }
+.chk-tap { display: flex; align-items: center; gap: 10px; flex: 1; text-align: left; background: none; border: 0; padding: 10px 12px; min-height: 44px; color: inherit; }
+.chk-row .ex-val { width: 74px; margin-right: 10px; text-align: right; }
+.ex-hint { display: block; }
+.chk-row { display: flex; align-items: center; background: var(--surface2); border: 1px solid var(--line); border-radius: var(--radius); }
+.chk-row.on .box { background: var(--ok); }
+/* v1.1.40 — this week's quota */
+.wk-strip { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
+.wk-it { padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); font-size: .85em; }
+.wk-it.on { background: var(--ok); color: #fff; border-color: transparent; }

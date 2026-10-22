@@ -9,7 +9,7 @@ const page = await ctx.newPage(); const errors = []; page.on('pageerror', e => e
 let fails = 0; const check = (n, c, d = '') => { console.log((c ? 'PASS ' : 'FAIL ') + n + (d ? '  ' + d : '')); if (!c) fails++; };
 await page.goto(base, { waitUntil: 'networkidle' }); await page.waitForSelector('#view .card');
 check('Home: no description blocks', await page.$$eval('#view details', d => d.length) === 0);
-check('Home: a Start button', !!(await page.$('#view [data-action=go-live]') || await page.$('#view [data-action=go-test]')));
+check('Home: a Start button (disabled on a rest day)', !!(await page.$('#view [data-action=go-live]') || await page.$('#view [data-action=go-test]') || await page.$('#view .card button[disabled]')));
 check('Home: 「오늘 체크」 with at least one row', await page.$$eval('.chk-row', r => r.length) >= 1);
 await page.click('#nav button[data-view=plan]'); await page.waitForSelector('.plan-day');
 check('Plan: no description blocks', await page.$$eval('#view details', d => d.length) === 0);
