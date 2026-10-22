@@ -149,3 +149,7 @@ details.desc > .desc-body { margin: 6px 0 2px; padding-left: 10px; border-left: 
 .ex-hint { display: block; }
 .chk-row { display: flex; align-items: center; background: var(--surface2); border: 1px solid var(--line); border-radius: var(--radius); }
 .chk-row.on .box { background: var(--ok); }
+/* v1.1.40 — this week's quota */
+.wk-strip { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
+.wk-it { padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); font-size: .85em; }
+.wk-it.on { background: var(--ok); color: #fff; border-color: transparent; }
