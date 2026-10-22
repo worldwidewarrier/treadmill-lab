@@ -11,7 +11,7 @@ import { importFile } from './importers.js';
 import { liveChart, timelineChart, stepTestChart, trendChart } from './charts.js';
 
 // ---------- defaults ----------
-export const APP_VERSION = '1.1.38'; // keep in sync with sw.js VERSION
+export const APP_VERSION = '1.1.39'; // keep in sync with sw.js VERSION
 const DEFAULTS = {
   profile: { birth: '1997-07-21', restHr: 52, restLactate: 0.8, restLactateAt: '2026-10-09', maxHr: 188, maxHrMode: 'tanaka', lang: 'both', theme: 'system' }, // restLactateAt: when the baseline was measured (a monthly reminder to re-measure)
   treadmill: { model: 'LTSXL', minSpeed: 0.8, maxSpeed: 18, speedStep: 0.1, maxIncline: 15, inclineStep: 0.5 },
@@ -287,29 +287,67 @@ function showRenderError(e) {
 document.getElementById('nav').addEventListener('click', e => { const b = e.target.closest('button'); if (b) navigate(b.dataset.view); });
 $('#view').addEventListener('click', onViewClick);
 
-// ---------- TODAY'S CHECKLIST (v1.1.37) ----------
-// Owner: "다른 운동 체크리스트 · 자유운동과 세션 둘 중 하나만 해도 체크". Running is ticked by the app as soon as any real session of today
-// is finished — the prescribed session or a free run (lactate checks, Free mode, a step test …), whichever; a tap ticks or unticks it by hand.
-// The other exercise of the day is a short list of its own. Stored per date in settings.checks (kept 60 days).
-const OTHER_EX = { 1: [['홈 세션 (가동성·코어)', 'Home session (mobility · core)'], ['추가 운동 (버드독·월 싯)', 'Extra (bird dog · wall sit)']], 2: [['근력 A', 'Strength A']], 3: [['걷기 20분', 'Walk 20 min'], ['플라이오', 'Plyometrics']], 4: [['근력 B', 'Strength B']], 5: [['폼롤링·카프 홀드', 'Foam roll · calf holds'], ['플라이오', 'Plyometrics']], 6: [['천국의 계단 (선택)', 'StairMaster (optional)']], 0: [['경사 걷기 (선택)', 'Incline walk (optional)']] };
-const todayKey = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
-const sameDay = (ms, key) => { if (!Number.isFinite(ms)) return false; const d = new Date(ms); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` === key; };
-function dayChecks(key) { const c = A.settings.checks || (A.settings.checks = {}); return c[key] || (c[key] = { run: null, o: {} }); }
-/** Running done today = any finished real session (not the demo strap) — session or free run — unless unticked by hand. */
-function runDone(all, key) { const ck = dayChecks(key); if (ck.run === true || ck.run === false) return ck.run; return all.some(s => s.final && s.sourceKind !== 'demo' && sameDay(s.startedAt, key)); }
-function checklistCard(today, all) {
-  const key = todayKey(); const dow = new Date().getDay(); const ck = dayChecks(key); const rest = today && today.type === 'rest';
-  const row = (id, on, ko, en) => `<button class="chk-row${on ? ' on' : ''}" data-action="chk" data-id="${id}"><span class="box" aria-hidden="true">${on ? '✓' : ''}</span><span>${esc(ko)}<span class="en">${esc(en)}</span></span></button>`;
-  const run = rest ? '' : row('run', runDone(all, key), '러닝 (세션 또는 자유 달리기)', 'Run (session or free run)');
-  const other = (OTHER_EX[dow] || []).map((x, i) => row('o' + i, !!ck.o[i], x[0], x[1])).join('');
-  return `<h2>오늘 체크 <span class="en">Today's checks</span></h2><div class="card chk-list">${run}${other}</div>`;
+// ---------- TODAY'S EXERCISE LIST (v1.1.39) ----------
+// Owner (10/23): "러닝 및 그 외 운동 세부 리스트를 제시하여 각각의 운동을 체크 · 이를 수집하여 다음 운동에 반영". Every part of the day is a row:
+// tap = done. Rows with a number (kg, reps, contacts, minutes) keep what was done; the next time the same exercise comes up its target is
+// computed from the last log — done with the target → the step up (lower lifts +5 kg, upper +2.5 kg, chin-ups +1 rep, plyometric contacts
+// +10 to 100, StairMaster +5 min to 20), not done → the same target again. Running rows tick themselves once a real session (or free run) of
+// today is finished; the run's RPE (session end, or typed here) shapes the next easy day. Stored in settings.log[date] (kept 120 days).
+const EX = {
+  r_wu: ['워밍업', 'Warm-up'], r_main: ['본 구간', 'Main part'], r_str: ['스트라이드 4–6 × 20초', 'Strides 4–6 × 20 s'], r_cd: ['쿨다운 걷기', 'Cool-down walk'], r_rpe: ['RPE (0–10)', 'RPE (0–10)', 'rpe'],
+  mob: ['가동성 5분', 'Mobility 5 min'], deadbug: ['데드버그 3×8/측', 'Dead bug 3 × 8/side'], splank: ['사이드 플랭크 2×30초/측', 'Side plank 2 × 30 s/side'], pallof: ['팔로프 2×10/측', 'Pallof 2 × 10/side'], foot: ['발 코어 5분', 'Foot core 5 min'],
+  birddog: ['버드독 2×8/측', 'Bird dog 2 × 8/side'], hollow: ['할로우 2×20초', 'Hollow 2 × 20 s'], sls: ['한발 서기 30초×2/측', 'Single-leg stand 30 s × 2/side'], wallsit: ['월 싯 2분×4', 'Wall sit 2 min × 4'],
+  squat: ['스쿼트 3×3–6', 'Squat 3 × 3–6', 'kg', 5], bench: ['벤치 3×8–12', 'Bench 3 × 8–12', 'kg', 2.5], chin: ['친업 3세트', 'Chin-up 3 sets', 'reps', 1],
+  dl: ['데드리프트 3×3–6', 'Deadlift 3 × 3–6', 'kg', 5], ohp: ['OHP 3×8–12', 'OHP 3 × 8–12', 'kg', 2.5], row: ['로우 3×8–12', 'Row 3 × 8–12', 'kg', 2.5],
+  rdl: ['RDL 3×8–12', 'RDL 3 × 8–12', 'kg', 5], bulg: ['불가리안 3×8/측', 'Bulgarian 3 × 8/side', 'kg', 2.5], facepull: ['페이스 풀 3×12', 'Face pull 3 × 12'], carry: ['파머스 캐리 2×40 m', 'Farmer\'s carry 2 × 40 m', 'kg', 2.5], calf: ['앉은 카프 3×15', 'Seated calf 3 × 15', 'kg', 2.5],
+  walk: ['걷기 20분', 'Walk 20 min'], incline: ['경사 걷기 20분', 'Incline walk 20 min'], plyo: ['플라이오 (접지)', 'Plyometrics (contacts)', 'contacts', 10], foam: ['폼롤링 5분', 'Foam roll 5 min'], calfhold: ['카프 홀드 5×45초', 'Calf holds 5 × 45 s'],
+  stairs: ['천국의 계단 (선택)', 'StairMaster (optional)', 'min', 5],
+};
+const UNIT = { kg: 'kg', reps: '회', contacts: '회', min: '분', rpe: '' };
+const CAP = { plyo: 100, stairs: 20 };
+const START = { stairs: 10, rpe: null };
+const OTHER_DAY = { 1: ['mob', 'deadbug', 'splank', 'pallof', 'foot', 'birddog', 'hollow', 'sls', 'wallsit'], 2: ['squat', 'bench', 'chin', 'rdl', 'pallof', 'carry', 'calf', 'sls'], 3: ['walk', 'plyo', 'incline'], 4: ['dl', 'ohp', 'row', 'bulg', 'facepull', 'carry', 'calf', 'sls'], 5: ['foam', 'calfhold', 'mob', 'plyo', 'foot', 'wallsit'], 6: ['stairs'], 0: ['incline'] };
+const dkey = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const todayKey = () => dkey(new Date());
+const sameDay = (ms, key) => Number.isFinite(ms) && dkey(new Date(ms)) === key;
+function dayLog(key) { const L = A.settings.log || (A.settings.log = {}); return L[key] || (L[key] = {}); }
+/** The last logged entry of an exercise before today. */
+function lastOf(id, key) { const L = A.settings.log || {}; const ks = Object.keys(L).filter(k => k < key && L[k][id] && (L[k][id].d || Number.isFinite(L[k][id].v))).sort(); return ks.length ? { date: ks[ks.length - 1], ...L[ks[ks.length - 1]][id] } : null; }
+/** Today's target from the last log: done → one step up (capped), not done → the same; none yet → the start value or empty. */
+function targetOf(id, key, plan) {
+  const ex = EX[id]; if (!ex || !ex[2] || ex[2] === 'rpe') return null; const last = lastOf(id, key);
+  if (!last || !Number.isFinite(last.v)) return id === 'plyo' && plan && Number.isFinite(plan.plyoContacts) ? plan.plyoContacts : (START[id] ?? null);
+  const up = last.d ? last.v + ex[3] : last.v; return CAP[id] ? Math.min(CAP[id], up) : up;
 }
+const realToday = (all, key) => all.filter(s => s.final && s.sourceKind !== 'demo' && sameDay(s.startedAt, key));
+function runRows(today) { if (!today || today.type === 'rest') return []; return ['r_wu', 'r_main', ...(today.day === 1 ? ['r_str'] : []), 'r_cd', 'r_rpe']; }
+/** The latest run RPE before today (session RPE or typed here) and whether that day was easy. */
+function lastRunRpe(all, key) {
+  const L = A.settings.log || {}; let best = null;
+  for (const s of all) { if (!s.final || s.sourceKind === 'demo' || !Number.isFinite(s.rpe) || sameDay(s.startedAt, key) || dkey(new Date(s.startedAt)) > key) continue; const k = dkey(new Date(s.startedAt)); if (!best || k > best.date) best = { date: k, rpe: s.rpe, easy: s.type === 'lt1' || s.type === 'free' }; }
+  for (const k of Object.keys(L)) { if (k >= key || !L[k].r_rpe || !Number.isFinite(L[k].r_rpe.v)) continue; if (!best || k > best.date) best = { date: k, rpe: L[k].r_rpe.v, easy: true }; }
+  return best;
+}
+function exDone(id, key, all) { const e = dayLog(key)[id]; if (e && (e.d === true || e.d === false)) return e.d; if (id.startsWith('r_') && id !== 'r_rpe') return realToday(all, key).length > 0; if (id === 'r_rpe') return Number.isFinite(e && e.v) || realToday(all, key).some(s => Number.isFinite(s.rpe)); return false; }
+function checklistCard(today, all, plan) {
+  const key = todayKey(); const dow = new Date().getDay(); const log = dayLog(key);
+  const row = id => { const ex = EX[id]; const on = exDone(id, key, all); const e = log[id] || {}; const kind = ex[2]; const tgt = targetOf(id, key, plan); const last = kind ? lastOf(id, key) : null;
+    const sessRpe = id === 'r_rpe' ? (realToday(all, key).find(s => Number.isFinite(s.rpe)) || {}).rpe : undefined; const val = Number.isFinite(e.v) ? e.v : (Number.isFinite(sessRpe) ? sessRpe : '');
+    const hint = kind && kind !== 'rpe' ? `${last ? `지난 ${last.v ?? '–'}${UNIT[kind]}${last.d ? ' ✓' : ''} · ` : ''}${tgt != null ? `오늘 ${tgt}${UNIT[kind]}` : '첫 기록'}` : '';
+    const inp = kind ? `<input class="ex-val" type="number" inputmode="decimal" step="${kind === 'kg' ? 0.5 : 1}" data-id="${id}" value="${val}" placeholder="${tgt ?? ''}" aria-label="${esc(ex[0])}">` : '';
+    return `<div class="chk-row${on ? ' on' : ''}"><button class="chk-tap" data-action="chk" data-id="${id}"><span class="box" aria-hidden="true">${on ? '✓' : ''}</span><span>${esc(ex[0])}<span class="en">${esc(ex[1])}</span>${hint ? `<span class="small muted ex-hint">${esc(hint)}</span>` : ''}</span></button>${inp}</div>`; };
+  const rr = runRows(today); const lr = lastRunRpe(all, key);
+  const flag = rr.length && lr && lr.easy && lr.rpe >= 5 && today && today.type === 'lt1' ? `<p class="notice warn small" style="margin:0 0 6px">지난 쉬운 런 RPE ${lr.rpe} (≥ 5) → 오늘은 밴드 하단, 속도 −0.3 <span class="en">Last easy run RPE ${lr.rpe} (≥ 5) → today at the low end, speed −0.3</span></p>` : '';
+  const other = OTHER_DAY[dow] || [];
+  return `<h2>오늘 체크 <span class="en">Today's checks</span></h2><div class="card chk-list">${rr.length ? `<div class="small muted">러닝 <span class="en">Run</span></div>${flag}${rr.map(row).join('')}` : ''}${other.length ? `<div class="small muted" style="margin-top:6px">다른 운동 <span class="en">Other exercise</span></div>${other.map(row).join('')}` : ''}</div>`;
+}
+function saveLog() { const L = A.settings.log; const keep = Object.keys(L).sort().slice(-120); for (const k of Object.keys(L)) if (!keep.includes(k)) delete L[k]; return saveSettings(); }
 function toggleCheck(id) {
-  const key = todayKey(); const ck = dayChecks(key);
-  if (id === 'run') ck.run = !runDone(A.sessions, key); else { const i = +id.slice(1); ck.o[i] = !ck.o[i]; }
-  const keep = Object.keys(A.settings.checks).sort().slice(-60); for (const k of Object.keys(A.settings.checks)) if (!keep.includes(k)) delete A.settings.checks[k];
-  saveSettings().then(render);
+  const key = todayKey(); const e = dayLog(key)[id] || (dayLog(key)[id] = {}); const on = exDone(id, key, A.sessions); e.d = !on;
+  if (e.d && !Number.isFinite(e.v)) { const t = targetOf(id, key, A.planCache || A.homePlan); if (Number.isFinite(t)) e.v = t; } // checked without typing = the target was done
+  saveLog().then(render);
 }
+function setExValue(id, raw) { const key = todayKey(); const v = parseFloat(String(raw).replace(',', '.')); const e = dayLog(key)[id] || (dayLog(key)[id] = {}); if (Number.isFinite(v)) { e.v = v; if (e.d !== false) e.d = true; } else delete e.v; saveLog().then(render); }
 
 // ---------- HOME ----------
 async function renderHome() {
@@ -333,7 +371,7 @@ async function renderHome() {
     html += `<div class="card">${descBlock('home-today', todayHead, todayBody)}
       <div class="grid1" style="margin-top:10px;display:grid">${today.type === 'rest' ? `<button disabled>${t('start_session')}</button>` : today.type === 'test' ? `<button class="primary big" data-action="go-test">${t('start_test')}</button>` : `<button class="primary big" data-action="go-live" data-mode="${today.type === 'lt2' || today.type === 'tempo' ? 'lt2' : today.type === 'verify' ? 'verify' : 'lt1'}" data-minutes="${today.minutes}" data-surface="${today.surface || 'treadmill'}"${Number.isFinite(today.speed) ? ` data-speed="${today.speed}"` : ''}${today.purpose ? ` data-purpose="${today.purpose}"` : ''}${today.structure ? ` data-structure="${esc(JSON.stringify(today.structure))}"` : ''}>${t('start_session')}</button>`}</div></div>`;
   } else html += `<div class="card"><p class="muted">${t('no_zones')}</p></div>`;
-  html += checklistCard(today, all);
+  A.homePlan = plan; html += checklistCard(today, all, plan);
   // the weekly LT1 verification run (v1.1.17): this week's test speed from the latest two-lap result; the band moves after two consecutive results
   if (z && bf.change) html += `<h2>${bf.cadence && bf.cadence.mode === 'maintenance' ? 'LT1 검증 (4주마다) <span class="en">LT1 check (every 4 weeks)</span>' : '주간 LT1 검증 <span class="en">Weekly LT1 check</span>'}</h2><div class="card"><p class="small"><b class="mono">${Number.isFinite(bf.nextSpeed) ? bf.nextSpeed.toFixed(1) + ' km/h' : '–'}</b></p>${bf.change ? `<button class="primary block" style="margin-top:8px" data-action="apply-band">범위 반영: ${esc(bf.change.ko)} <span class="en">Apply the band change</span></button>` : ''}<div class="row" style="margin-top:8px"><button class="compact" data-action="go-live" data-mode="verify"${Number.isFinite(bf.nextSpeed) ? ` data-speed="${bf.nextSpeed}"` : ''}>${t('mode_verify')} ›</button></div></div>`;
   // the MLSS checks (v1.1.35): two passes at the same speed before the ladder speed rises; the end lactate of a pass/hold is the ladder's target
@@ -924,6 +962,7 @@ async function onSettingsChange(e) {
   if (path === 'profile.lang' || path === 'profile.maxHrMode' || path === 'profile.birth') render();
 }
 $('#view').addEventListener('change', onSettingsChange);
+$('#view').addEventListener('change', e => { const i = e.target.closest && e.target.closest('.ex-val'); if (i) setExValue(i.dataset.id, i.value); });
 
 // ---------- click actions ----------
 async function onViewClick(e) {
