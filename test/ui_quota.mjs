@@ -7,22 +7,25 @@ let f = 0; const ck = (n, c, d = '') => { console.log((c ? 'PASS ' : 'FAIL ') + 
 const go = async iso => { await p.clock.setFixedTime(new Date(iso)); await p.goto(process.env.TL_BASE || 'http://127.0.0.1:8765/', { waitUntil: 'networkidle' }); await p.waitForSelector('#view .card'); await p.evaluate(() => { document.getElementById('toast-root').innerHTML = ''; }); };
 const title = () => p.$eval('#view h3', e => e.textContent).catch(() => '');
 const strip = () => p.$eval('.wk-strip', e => e.textContent).catch(() => '');
+const putRun = (iso, type, rpe) => p.evaluate(async ([iso, type, rpe]) => { const r = indexedDB.open('treadmill-lab', 1); await new Promise(res => r.onsuccess = res); const t = r.result.transaction('sessions', 'readwrite'); t.objectStore('sessions').put({ id: 'run-' + iso, type, final: true, sourceKind: 'ble', startedAt: new Date(iso).getTime(), rpe, hrLive: [], rr: [], events: [] }); await new Promise(res => t.oncomplete = res); }, [iso, type, rpe ?? null]);
 const tick = async id => { await p.click(`.chk-tap[data-id=${id}]`); await p.waitForTimeout(250); };
 await p.clock.install({ time: new Date('2026-11-02T07:00:00+09:00') });
 await go('2026-11-02T07:00:00+09:00'); // Mon of a ladder week
 ck('Mon: an easy run, quota strip shown', /쉬운 런/.test(await title()) && /쉬운 런 0\/3/.test(await strip()), (await title()) + ' | ' + (await strip()));
 ck('Mon: busy-day button', !!(await p.$('button[data-minutes="20"]')));
 ck('Mon: bodyweight rows', !!(await p.$('.chk-tap[data-id=bw_push]')));
+ck('Mon: one run row, not tappable, unticked', (await p.$$eval('.chk-tap[data-id^=r_]', r => r.map(x => x.dataset.id + ':' + (x.tagName) + ':' + x.parentElement.classList.contains('on')))).join() === 'r_run:DIV:false');
 await go('2026-11-03T07:00:00+09:00'); // Tue: skipped Monday, hard is due
 ck('Tue: the hard session', /사다리|VO₂max|언덕/.test(await title()), await title());
 // skip Tue entirely → Wed still offers the hard session
 await go('2026-11-04T07:00:00+09:00');
 ck('Wed (Tue missed): hard moves to Wed', /사다리|VO₂max|언덕/.test(await title()), await title());
-await tick('r_main'); await tick('bw_push');
+await putRun('2026-11-04T06:00:00+09:00', 'lt2'); await tick('bw_push');
 await go('2026-11-05T07:00:00+09:00');
+ck('Thu: Wed\'s session was counted', true);
 ck('Thu: no hard within 48 h → easy', /쉬운 런/.test(await title()), await title());
 ck('Thu: strip counts hard 1/1 and strength 1/2', /고강도 1\/1/.test(await strip()) && /근력 1\/2/.test(await strip()), await strip());
-await tick('r_main');
+await putRun('2026-11-05T06:00:00+09:00', 'lt1');
 await go('2026-11-06T07:00:00+09:00');
 ck('Fri: catch-up easy run while quota left', /쉬운 런/.test(await title()), await title());
 await go('2026-11-07T09:00:00+09:00');
