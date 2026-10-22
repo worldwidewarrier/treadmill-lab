@@ -11,7 +11,7 @@ import { importFile } from './importers.js';
 import { liveChart, timelineChart, stepTestChart, trendChart } from './charts.js';
 
 // ---------- defaults ----------
-export const APP_VERSION = '1.1.40'; // keep in sync with sw.js VERSION
+export const APP_VERSION = '1.1.41'; // keep in sync with sw.js VERSION
 const DEFAULTS = {
   profile: { birth: '1997-07-21', restHr: 52, restLactate: 0.8, restLactateAt: '2026-10-09', maxHr: 188, maxHrMode: 'tanaka', lang: 'both', theme: 'system' }, // restLactateAt: when the baseline was measured (a monthly reminder to re-measure)
   treadmill: { model: 'LTSXL', minSpeed: 0.8, maxSpeed: 18, speedStep: 0.1, maxIncline: 15, inclineStep: 0.5 },
@@ -294,7 +294,7 @@ $('#view').addEventListener('click', onViewClick);
 // +10 to 100, StairMaster +5 min to 20), not done → the same target again. Running rows tick themselves once a real session (or free run) of
 // today is finished; the run's RPE (session end, or typed here) shapes the next easy day. Stored in settings.log[date] (kept 120 days).
 const EX = {
-  r_wu: ['워밍업', 'Warm-up'], r_main: ['본 구간', 'Main part'], r_str: ['스트라이드 4–6 × 20초', 'Strides 4–6 × 20 s'], r_cd: ['쿨다운 걷기', 'Cool-down walk'], r_rpe: ['RPE (0–10)', 'RPE (0–10)', 'rpe'],
+  r_run: ['러닝 — 세션을 끝내면 자동 체크', 'Run — ticked when a session is finished'], r_wu: ['워밍업', 'Warm-up'], r_main: ['본 구간', 'Main part'], r_str: ['스트라이드 4–6 × 20초', 'Strides 4–6 × 20 s'], r_cd: ['쿨다운 걷기', 'Cool-down walk'], r_rpe: ['RPE (0–10)', 'RPE (0–10)', 'rpe'],
   mob: ['가동성 5분', 'Mobility 5 min'], deadbug: ['데드버그 3×8/측', 'Dead bug 3 × 8/side'], splank: ['사이드 플랭크 2×30초/측', 'Side plank 2 × 30 s/side'], pallof: ['팔로프 2×10/측', 'Pallof 2 × 10/side'], foot: ['발 코어 5분', 'Foot core 5 min'],
   birddog: ['버드독 2×8/측', 'Bird dog 2 × 8/side'], hollow: ['할로우 2×20초', 'Hollow 2 × 20 s'], sls: ['한발 서기 30초×2/측', 'Single-leg stand 30 s × 2/side'], wallsit: ['월 싯 2분×4', 'Wall sit 2 min × 4'],
   squat: ['스쿼트 3×3–6', 'Squat 3 × 3–6', 'kg', 5], bench: ['벤치 3×8–12', 'Bench 3 × 8–12', 'kg', 2.5], chin: ['친업 3세트', 'Chin-up 3 sets', 'reps', 1],
@@ -323,8 +323,7 @@ function weekDone(all, monday) {
   const out = { easy: 0, hard: 0, str: 0, runDays: 0, hardDays: [], days: {} };
   for (let i = 0; i < 7; i++) { const d = new Date(monday); d.setDate(d.getDate() + i); const k = dkey(d); const L = (A.settings.log || {})[k] || {};
     const ss = all.filter(s => s.final && s.sourceKind !== 'demo' && sameDay(s.startedAt, k) && s.type !== 'test');
-    let kind = ss.some(isHardSess) ? 'hard' : ss.length ? 'easy' : (L.r_main && L.r_main.d ? (L.kind || 'easy') : null);
-    if (L.r_main && L.r_main.d === false) kind = null;
+    const kind = ss.some(isHardSess) ? 'hard' : ss.length ? 'easy' : null; // v1.1.41: only finished sessions count
     const wk = i < 5; if (kind) { out.runDays++; if (wk) out[kind]++; if (kind === 'hard') out.hardDays.push(k); }
     if (wk && ['bw_split', 'bw_push', 'bw_chin'].some(id => L[id] && L[id].d)) out.str++;
     out.days[k] = kind; }
@@ -382,7 +381,8 @@ function targetOf(id, key, plan) {
   const up = last.d ? last.v + ex[3] : last.v; return CAP[id] ? Math.min(CAP[id], up) : up;
 }
 const realToday = (all, key) => all.filter(s => s.final && s.sourceKind !== 'demo' && sameDay(s.startedAt, key));
-function runRows(today) { if (!today || today.type === 'rest') return []; return ['r_wu', 'r_main', ...(today.day === 1 ? ['r_str'] : []), 'r_cd', 'r_rpe']; }
+// v1.1.41 (owner: "러닝은 세션 실시가 곧 체크로"): one running row, ticked only by a finished real session of today — no ticking by hand.
+function runRows(today) { if (!today || today.type === 'rest') return []; return ['r_run']; }
 /** The latest run RPE before today (session RPE or typed here) and whether that day was easy. */
 function lastRunRpe(all, key) {
   const L = A.settings.log || {}; let best = null;
@@ -390,14 +390,15 @@ function lastRunRpe(all, key) {
   for (const k of Object.keys(L)) { if (k >= key || !L[k].r_rpe || !Number.isFinite(L[k].r_rpe.v)) continue; if (!best || k > best.date) best = { date: k, rpe: L[k].r_rpe.v, easy: true }; }
   return best;
 }
-function exDone(id, key, all) { const e = dayLog(key)[id]; if (e && (e.d === true || e.d === false)) return e.d; if (id.startsWith('r_') && id !== 'r_rpe') return realToday(all, key).length > 0; if (id === 'r_rpe') return Number.isFinite(e && e.v) || realToday(all, key).some(s => Number.isFinite(s.rpe)); return false; }
+function exDone(id, key, all) { if (id === 'r_run') return realToday(all, key).length > 0; const e = dayLog(key)[id]; if (e && (e.d === true || e.d === false)) return e.d; if (id.startsWith('r_') && id !== 'r_rpe') return realToday(all, key).length > 0; if (id === 'r_rpe') return Number.isFinite(e && e.v) || realToday(all, key).some(s => Number.isFinite(s.rpe)); return false; }
 function checklistCard(today, all, plan) {
   const key = todayKey(); const dow = new Date().getDay(); const log = dayLog(key);
   const row = id => { const ex = EX[id]; const on = exDone(id, key, all); const e = log[id] || {}; const kind = ex[2]; const tgt = targetOf(id, key, plan); const last = kind ? lastOf(id, key) : null;
     const sessRpe = id === 'r_rpe' ? (realToday(all, key).find(s => Number.isFinite(s.rpe)) || {}).rpe : undefined; const val = Number.isFinite(e.v) ? e.v : (Number.isFinite(sessRpe) ? sessRpe : '');
     const hint = kind && kind !== 'rpe' ? `${last ? `지난 ${last.v ?? '–'}${UNIT[kind]}${last.d ? ' ✓' : ''} · ` : ''}${tgt != null ? `오늘 ${tgt}${UNIT[kind]}` : '첫 기록'}` : '';
     const inp = kind ? `<input class="ex-val" type="number" inputmode="decimal" step="${kind === 'kg' ? 0.5 : 1}" data-id="${id}" value="${val}" placeholder="${tgt ?? ''}" aria-label="${esc(ex[0])}">` : '';
-    return `<div class="chk-row${on ? ' on' : ''}"><button class="chk-tap" data-action="chk" data-id="${id}"><span class="box" aria-hidden="true">${on ? '✓' : ''}</span><span>${esc(ex[0])}<span class="en">${esc(ex[1])}</span>${hint ? `<span class="small muted ex-hint">${esc(hint)}</span>` : ''}</span></button>${inp}</div>`; };
+    const tap = id === 'r_run' ? `<div class="chk-tap" data-id="${id}">` : `<button class="chk-tap" data-action="chk" data-id="${id}">`;
+    return `<div class="chk-row${on ? ' on' : ''}">${tap}<span class="box" aria-hidden="true">${on ? '✓' : ''}</span><span>${esc(ex[0])}<span class="en">${esc(ex[1])}</span>${hint ? `<span class="small muted ex-hint">${esc(hint)}</span>` : ''}</span>${id === 'r_run' ? '</div>' : '</button>'}${inp}</div>`; };
   A.homeToday = today; const rr = runRows(today); const lr = lastRunRpe(all, key);
   const flag = rr.length && lr && lr.easy && lr.rpe >= 5 && today && today.type === 'lt1' ? `<p class="notice warn small" style="margin:0 0 6px">지난 쉬운 런 RPE ${lr.rpe} (≥ 5) → 오늘은 밴드 하단, 속도 −0.3 <span class="en">Last easy run RPE ${lr.rpe} (≥ 5) → today at the low end, speed −0.3</span></p>` : '';
   const other = otherRows(today, all, key);

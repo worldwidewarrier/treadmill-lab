@@ -2,16 +2,17 @@ import { chromium } from '/opt/npm-tools/node_modules/playwright/index.mjs';
 import { tmpdir } from 'node:os'; const S=tmpdir();
 const b=await chromium.launch(); const ctx=await b.newContext({viewport:{width:384,height:790},deviceScaleFactor:2,isMobile:true,hasTouch:true,colorScheme:'dark',locale:'ko-KR',timezoneId:'Asia/Seoul'});
 const p=await ctx.newPage(); const errs=[]; p.on('pageerror',e=>errs.push(e.message)); p.on('console',m=>{if(m.type()==='error')errs.push(m.text())});
+const putRun = (iso, type, rpe) => p.evaluate(async ([iso, type, rpe]) => { const r = indexedDB.open('treadmill-lab', 1); await new Promise(res => r.onsuccess = res); const t = r.result.transaction('sessions', 'readwrite'); t.objectStore('sessions').put({ id: 'run-' + iso, type, final: true, sourceKind: 'ble', startedAt: new Date(iso).getTime(), rpe, hrLive: [], rr: [], events: [] }); await new Promise(res => t.oncomplete = res); }, [iso, type, rpe ?? null]);
 let f=0; const ck=(n,c,d='')=>{console.log((c?'PASS ':'FAIL ')+n+' '+d); if(!c)f++;};
 const go=async iso=>{ await p.clock.setFixedTime(new Date(iso)); await p.goto('http://127.0.0.1:8765/',{waitUntil:'networkidle'}); await p.waitForSelector('.chk-row'); };
 await p.clock.install({time:new Date('2026-10-27T07:00:00+09:00')});
 await go('2026-11-07T09:00:00+09:00'); // Sat (barbell at the gym since v1.1.40)
-let ids=await p.$$eval('.chk-tap',r=>r.map(x=>x.dataset.id)); ck('Sat rows', ids.includes('squat')&&ids.includes('r_main'), ids.join(','));
+let ids=await p.$$eval('.chk-tap',r=>r.map(x=>x.dataset.id)); ck('Sat rows', ids.includes('squat')&&ids.includes('r_run'), ids.join(','));
 await p.fill('.ex-val[data-id=squat]','60'); await p.dispatchEvent('.ex-val[data-id=squat]','change'); await p.waitForTimeout(300);
 await p.fill('.ex-val[data-id=ohp]','40'); await p.dispatchEvent('.ex-val[data-id=ohp]','change'); await p.waitForTimeout(300);
 await p.click('.chk-tap[data-id=ohp]'); await p.waitForTimeout(300); // untick: not all reps
 ck('squat ticked by value', await p.$eval('.chk-tap[data-id=squat]',e=>e.parentElement.classList.contains('on')));
-await p.fill('.ex-val[data-id=r_rpe]','6'); await p.dispatchEvent('.ex-val[data-id=r_rpe]','change'); await p.waitForTimeout(300);
+await putRun('2026-11-06T06:00:00+09:00','lt1',6);
 await p.screenshot({path:S+'/tue.png',fullPage:true});
 await go('2026-11-14T09:00:00+09:00'); // next Sat
 const ph=id=>p.$eval(`.ex-val[data-id=${id}]`,e=>e.placeholder);
