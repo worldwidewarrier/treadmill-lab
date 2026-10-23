@@ -8,10 +8,11 @@ import { SessionEngine, DEFAULT_PROTOCOL, DEFAULT_INTERVALS, DEFAULT_LAPS, LT1_W
 import { analyzeSession, summarizeStages, smo2Steady, estimateOffsetMs, runTimeline, list, setAlphaUse, ALPHA_ARTIFACT_MAX } from './analysis.js';
 import { asLactateOnly, checkDueInWeek, computeZones, sessionTargets, sessionSpeeds, midSpeed, weeklyPlan, lt2Structure, sessionMetrics, assessRecent, sessionSummaryText, claudeSummary, lactateChecks, typedChecks, midLabel, setRestBaseline, setTestLowest, testLowest, lactateFloor, lactateVerdict, verdictZoneChange, multiDayCurve, endWindowStats, lapStats, bandFinder, longestRecentMin, GAP_STRICT_SEC, CURVE_LT2_MIN_LA, planContext, PLAN_WHY, vo2Speed, vo2Band, mlssPasses, longestHardWorkMin, setMlssLactate, ladderLactateWindow, PLACES, SURFACES, onBelt } from './prescribe.js';
 import { importFile } from './importers.js';
+import { readGarminFile, garminSession } from './garmin.js';
 import { liveChart, timelineChart, stepTestChart, trendChart } from './charts.js';
 
 // ---------- defaults ----------
-export const APP_VERSION = '1.1.41'; // keep in sync with sw.js VERSION
+export const APP_VERSION = '1.1.42'; // keep in sync with sw.js VERSION
 const DEFAULTS = {
   profile: { birth: '1997-07-21', restHr: 52, restLactate: 0.8, restLactateAt: '2026-10-09', maxHr: 188, maxHrMode: 'tanaka', lang: 'both', theme: 'system' }, // restLactateAt: when the baseline was measured (a monthly reminder to re-measure)
   treadmill: { model: 'LTSXL', minSpeed: 0.8, maxSpeed: 18, speedStep: 0.1, maxIncline: 15, inclineStep: 0.5 },
@@ -403,7 +404,7 @@ function checklistCard(today, all, plan) {
   const flag = rr.length && lr && lr.easy && lr.rpe >= 5 && today && today.type === 'lt1' ? `<p class="notice warn small" style="margin:0 0 6px">지난 쉬운 런 RPE ${lr.rpe} (≥ 5) → 오늘은 밴드 하단, 속도 −0.3 <span class="en">Last easy run RPE ${lr.rpe} (≥ 5) → today at the low end, speed −0.3</span></p>` : '';
   const other = otherRows(today, all, key);
   const minNote = other.some(id => id.startsWith('bw_')) ? `<p class="small muted" style="margin:2px 0 4px">달리기 직후 러닝복 그대로 · 각 1세트만 해도 완료 <span class="en">Right after the run, in running kit · one set each counts</span></p>` : '';
-  return `<h2>오늘 체크 <span class="en">Today's checks</span></h2><div class="card chk-list">${rr.length ? `<div class="small muted">러닝 <span class="en">Run</span></div>${flag}${rr.map(row).join('')}` : ''}${other.length ? `<div class="small muted" style="margin-top:6px">다른 운동 <span class="en">Other exercise</span></div>${minNote}${other.map(row).join('')}` : ''}</div>`;
+  return `<h2>오늘 체크 <span class="en">Today's checks</span></h2><div class="card chk-list">${rr.length ? `<div class="small muted">러닝 <span class="en">Run</span></div>${flag}${rr.map(row).join('')}` : ''}<button class="ghost compact block" data-action="garmin" style="margin-top:2px">가민 기록 추가 (.zip / .fit) <span class="en">Add a Garmin run</span></button>${other.length ? `<div class="small muted" style="margin-top:6px">다른 운동 <span class="en">Other exercise</span></div>${minNote}${other.map(row).join('')}` : ''}</div>`;
 }
 function saveLog() { const L = A.settings.log; const keep = Object.keys(L).sort().slice(-120); for (const k of Object.keys(L)) if (!keep.includes(k)) delete L[k]; return saveSettings(); }
 function toggleCheck(id) {
@@ -944,6 +945,14 @@ function alignmentText(smo2) {
   return `심박 교차검증 ✓ 오차 ${f(a.mad, 2)} bpm, 추정 ${Number.isFinite(a.estimatedMs) ? Math.round(a.estimatedMs / 1000) : '–'} s / HR-verified, ${f(a.mad, 2)} bpm, est. ${Number.isFinite(a.estimatedMs) ? Math.round(a.estimatedMs / 1000) : '–'} s`;
 }
 async function autoAttach(sess) { if (sess.smo2) return; const imps = await store.listImports(); for (const i of imps) { if (!i.smo2Series?.length) continue; const ov = Math.min(i.endedAt, sess.endedAt) - Math.max(i.startedAt, sess.startedAt); if (ov > 0.5 * (i.endedAt - i.startedAt)) { sess.smo2 = buildSmo2(sess, i); await store.putSession(sess); return; } } }
+// v1.1.42: a Garmin run (Garmin Connect web → the activity → ⚙ → Export Original → the .zip, or the .fit inside) → one finished session
+$('#garmin-input').addEventListener('change', async e => { const file = e.target.files[0]; e.target.value = ''; if (!file) return;
+  try { const { name, fit } = await readGarminFile(file); const s = garminSession(fit, name, zonesObj());
+    if (await store.getSession(s.id)) { toast('이미 추가된 가민 기록입니다 / this Garmin run is already in', 3000); return; }
+    await store.putSession(s); await refreshLists(); const g = s.garmin; const pace = g.paceSecPerKm ? `${Math.floor(g.paceSecPerKm / 60)}:${String(g.paceSecPerKm % 60).padStart(2, '0')}/km` : '';
+    toast(`가민 기록 추가: ${fmtDate(s.startedAt)} · ${Math.round(g.elapsedSec / 60)}분 · ${g.distanceM ? (g.distanceM / 1000).toFixed(2) + ' km' : ''} ${pace}${s.type === 'lt2' ? ' · 고강도' : ''} — RPE를 입력하세요 / Garmin run added — enter the RPE`, 5000);
+    navigate('analysis', s.id);
+  } catch (err) { console.error('garmin', err); toast('가민 파일을 읽지 못했습니다: ' + (err.message || err) + ' / could not read the Garmin file', 5000); } });
 $('#file-input').addEventListener('change', async e => { const files = [...e.target.files]; e.target.value = ''; if (A.pendingSmo2For) { const id = A.pendingSmo2For; A.pendingSmo2For = null; if (files[0]) await attachSmo2File(id, files[0]); return; } if (A.pendingReplayPick) { A.pendingReplayPick = false; if (files[0]) { try { const imp = await importFile(files[0]); if (!imp.rr?.length) throw new Error('no RR'); A.live.replay = { rr: imp.rr, filename: files[0].name, durationSec: imp.durationSec }; toast(`${imp.rr.length} RR`); } catch (err) { toast('RR 파일이 아닙니다 / not an RR file'); } render(); } return; } await handleFiles(files); });
 
 // ---------- PLAN ----------
@@ -1036,6 +1045,7 @@ async function onViewClick(e) {
   switch (act) {
     case 'go-test': A.live.mode = 'test'; navigate('live'); break;
     case 'chk': toggleCheck(b.dataset.id); break;
+    case 'garmin': $('#garmin-input').click(); break;
     case 'quota': { A.settings.quota = { ...quota(), [b.dataset.k]: +b.dataset.to }; await saveSettings(); render(); toast('주간 할당을 바꿨습니다 / weekly quota changed', 2000); break; }
     case 'go-live': A.live.mode = b.dataset.mode || 'lt1'; if (b.dataset.minutes && A.live.mode !== 'verify') A.live.minutes = +b.dataset.minutes; if (A.live.mode === 'verify') { A.live.purpose = b.dataset.purpose === 'mlss' ? 'mlss' : 'lt1'; A.live.laps = { ...A.settings.laps, ...(A.live.purpose === 'mlss' ? { lap2Sec: 1200 } : {}) }; } if (A.live.mode === 'lt2') { let st = null; try { st = b.dataset.structure ? JSON.parse(b.dataset.structure) : null; } catch (e) { st = null; } A.live.lt2 = st || lt2Structure(planWeek()); } A.live.speed = b.dataset.speed ? +b.dataset.speed : null; A.live.surface = SURFACES.includes(b.dataset.surface) ? b.dataset.surface : 'treadmill'; navigate('live'); break; // the speed field opens with the plan's speed for this session (v1.1.26: also the easy run, the long run and the ladder — the session names that speed), not with the last session's
     case 'fill-calendar': confirmBox('주 달력을 10/10 계획(10/12 시작)으로 바꿀까요? 지금 적힌 줄은 지워집니다. / Replace the week calendar with the Oct 10 plan (start 10/12)? The current lines are discarded.', async () => { A.settings.plan.startDate = PLAN_START; A.settings.plan.weekOffset = 0; A.settings.plan.calendar = DEFAULT_CALENDAR; await saveSettings(); render(); toast('주 달력을 채웠습니다 / calendar filled in', 2000); }); break;
