@@ -33,11 +33,19 @@ export function garminSession(fit, filename = '', zones = null) {
   let hardSec = 0; const lt2 = zones && Number.isFinite(zones.lt2Hr) ? zones.lt2Hr - 5 : null;
   if (lt2 != null) for (let i = 1; i < hrLive.length; i++) { const dt = (hrLive[i][0] - hrLive[i - 1][0]) / 1000; if (hrLive[i][1] >= lt2 && dt > 0 && dt < 30) hardSec += dt; }
   const hard = hardSec >= 600;
+  // v1.1.43: what the watch measured beyond heart rate — cadence, 1-km laps (pace + heart rate), and the pace at a fixed heart rate (LT1 − 3):
+  // the mean speed of the running samples (after minute 10, faster than 1.5 m/s) whose heart rate is within ± 3 bpm of it, ≥ 2 min of them.
+  const run = recs.filter(r => Number.isFinite(r.speed) && r.speed > 1.5);
+  const cad = run.map(r => r.cadence).filter(c => c > 0); const cadenceSpm = cad.length ? Math.round(2 * cad.reduce((a, b) => a + b, 0) / cad.length) : null; // FIT running cadence = one foot (rpm)
+  const lapsDetail = (fit.laps || []).filter(l => l.tStart != null && l.tEnd != null && l.distance > 0).map(l => { const hs = recs.filter(r => r.t >= l.tStart && r.t <= l.tEnd && r.hr > 0).map(r => r.hr); const sec = l.elapsed ?? (l.tEnd - l.tStart) / 1000; return { km: Math.round(l.distance) / 1000, sec: Math.round(sec), pace: Math.round(sec / (l.distance / 1000)), hr: hs.length ? Math.round(hs.reduce((a, b) => a + b, 0) / hs.length) : null }; });
+  const refHr = zones && Number.isFinite(zones.lt1Hr) ? zones.lt1Hr - 3 : 140;
+  const band = run.filter(r => r.t >= t0 + 600000 && r.hr > 0 && Math.abs(r.hr - refHr) <= 3);
+  const paceAtHr = band.length >= 120 ? { hr: refHr, pace: Math.round(1000 / (band.reduce((a, r) => a + r.speed, 0) / band.length)), n: band.length } : { hr: refHr, pace: null, n: band.length };
   return {
     id: 'garmin-' + t0, type: hard ? 'lt2' : 'free', sourceKind: 'garmin', final: true, startedAt: t0, endedAt: t1, surface: 'outdoor',
     hrLive, rr: fit.rr || [], features: [], events: [], stages: [], tiz: {}, pauseMs: 0,
     meta: { speed: distM && moving ? Math.round(36 * distM / moving) / 10 : null, surface: 'outdoor' },
-    garmin: { filename, distanceM: distM, elapsedSec: moving, paceSecPerKm: distM ? Math.round(moving / (distM / 1000)) : null, hardMin: Math.round(hardSec / 60), laps: (fit.laps || []).length },
+    garmin: { v: 2, filename, distanceM: distM, elapsedSec: moving, paceSecPerKm: distM ? Math.round(moving / (distM / 1000)) : null, hardMin: Math.round(hardSec / 60), laps: (fit.laps || []).length, cadenceSpm, lapsDetail, paceAtHr },
   };
 }
 
@@ -46,4 +54,15 @@ export async function readGarminFile(file) {
   const buf = await file.arrayBuffer();
   if (/\.zip$/i.test(file.name || '') || new DataView(buf).getUint32(0, true) === 0x04034b50) { const z = await fitFromZip(buf); return { name: z.name, fit: parseFit(z.buf) }; }
   return { name: file.name, fit: parseFit(buf) };
+}
+
+export const fmtPace = sec => Number.isFinite(sec) ? `${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, '0')}` : '–';
+/** Pace at the fixed heart rate over time (easy Garmin runs): the last 14 days vs the 14 before; ≥ 2 runs in each and a change of ≥ 10 s/km
+ *  → 'faster' (an LT1 check may move the band) or 'slower' (fatigue, heat, sleep — check them). Outdoor values: never a zone change by themselves. */
+export function paceTrend(sessions, now = Date.now()) {
+  const pts = sessions.filter(s => s.sourceKind === 'garmin' && s.final && s.type !== 'lt2' && s.garmin && s.garmin.paceAtHr && Number.isFinite(s.garmin.paceAtHr.pace)).map(s => ({ t: s.startedAt, pace: s.garmin.paceAtHr.pace, hr: s.garmin.paceAtHr.hr })).sort((a, b) => a.t - b.t);
+  const d = 864e5; const a = pts.filter(p => p.t > now - 14 * d), b = pts.filter(p => p.t <= now - 14 * d && p.t > now - 28 * d);
+  const m = x => x.reduce((s, p) => s + p.pace, 0) / x.length;
+  let flag = null; if (a.length >= 2 && b.length >= 2) { const diff = m(a) - m(b); if (diff <= -10) flag = { kind: 'faster', diff: Math.round(-diff) }; else if (diff >= 10) flag = { kind: 'slower', diff: Math.round(diff) }; }
+  return { pts, flag };
 }
