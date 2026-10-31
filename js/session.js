@@ -159,7 +159,13 @@ export class SessionEngine {
     if (!(this.protocol.pauseSec > 0)) { // continuous (α1-only) test: no sampling pause, straight into the next stage
       st.tPauseEnd = now; if (this.stopAdvised) { this.setPhase('done', now); return; } this.beginStage(this.stageIdx + 1, now); return;
     }
-    this.setPhase('pause', now); this.pendingLactate = st.idx;
+    this.setPhase('pause', now);
+    // v1.1.44 — a part of the split step test: the stages before the measured ones stop the same 30 s (the same accumulated state as in one
+    // continuous test) but open no lactate prompt; after the part's last stage the pause ends the test
+    const split = Array.isArray(this.meta?.splitStages) ? this.meta.splitStages : null;
+    if (split && Number.isFinite(this.meta?.splitLast) && st.idx >= this.meta.splitLast) this.stopAdvised = true;
+    if (split && !split.includes(st.idx)) { this.pendingLactate = null; this.alerts?.cue(VOICE.stage_end_skip(this.stopAdvised), { beep: 'triple', vib: [500, 200, 500] }); this.onEvent({ type: 'lactate-skip', stage: st.idx }); return; }
+    this.pendingLactate = st.idx;
     this.alerts?.cue(VOICE.stage_end(), { beep: 'triple', vib: [500, 200, 500] });
     this.onEvent({ type: 'lactate-prompt', stage: st.idx });
   }
@@ -210,7 +216,7 @@ export class SessionEngine {
   enterLactate(value, stageIdx = null) {
     const idx = stageIdx ?? this.pendingLactate; const st = this.stages.find(s => s.idx === idx) || this.stages[this.stages.length - 1];
     if (st && value != null && Number.isFinite(value)) { if (st.lactate != null) st.lactate2 = value; else st.lactate = value; /* a second strip at the same stage (v1.1.31: kept even when equal — a duplicate) */ }
-    const now = this.now(); this.pendingLactate = null; this.events.push({ t: now, type: 'lactate', stage: st ? st.idx : null, rep: this.rep, phase: this.phase, value, ...this.sampleTags(now) });
+    const now = this.now(); if (stageIdx == null || this.pendingLactate === idx || !Number.isFinite(this.pendingLactate)) this.pendingLactate = null; /* v1.1.44: a value typed late (the next stage already ended) must not swallow that stage's prompt */ this.events.push({ t: now, type: 'lactate', stage: st ? st.idx : null, rep: this.rep, phase: this.phase, value, ...this.sampleTags(now) });
     if (value >= this.protocol.stopLactate && !this.stopAdvised && this.mode === 'test') {
       // v1.1.35: lactate ≥ 6.0 is a floor, not the end — the test goes on until minStagesPast4 stages at or above 4.0 mmol/L are done (the same end point every time), unless the heart-rate criterion or an uncompleted stage ends it first
       const at4 = this.stages.filter(x => Number.isFinite(x.lactate) && Math.max(x.lactate, Number.isFinite(x.lactate2) ? x.lactate2 : -Infinity) >= 4.0).length; const beyond = Math.max(0, at4 - 1); // stages beyond the first one at or above 4.0 (the 4-mmol point itself does not count)
@@ -306,7 +312,7 @@ export class SessionEngine {
     let z = 'in'; if (hr > hi) z = 'above'; else if (hr < T.hrLo) z = 'below'; else this.tiz.inSec += this.stepSec;
     if ((late || lt2Extra > 0) && z === 'in' && hr > T.hrHi) z = 'drift'; // above the band, under the ceiling: shown, not cued
     const A = this.alerts, exitSec = this.settings.alerts?.zoneExitSec ?? 30;
-    if (z === 'in' || z === 'drift' || grace) this.outsideSince = 0; else { if (!this.outsideSince) this.outsideSince = now; if ((now - this.outsideSince) / 1000 >= ((late || lt2) && z === 'above' ? 60 : exitSec)) { if (late && z === 'above') A?.cue(VOICE.ceiling(), { beep: 'low', vib: [150, 100, 150], key: 'ceil', minGapSec: 180 }); else if (lt2 && z === 'above') A?.cue(T.kind === 'vo2' ? VOICE.vo2_high() : VOICE.lt2_ceiling(), { beep: 'low', vib: [150, 100, 150], key: 'ceil2', minGapSec: 240 }); else A?.cue(z === 'above' ? VOICE.zone_high() : VOICE.zone_low(), { beep: z === 'above' ? 'low' : 'high', vib: [150, 100, 150], key: 'zone', minGapSec: 60 }); } }
+    if (z === 'in' || z === 'drift' || grace) this.outsideSince = 0; else { if (!this.outsideSince) this.outsideSince = now; if ((now - this.outsideSince) / 1000 >= ((late || lt2) && z === 'above' ? 60 : exitSec)) { if (late && z === 'above') A?.cue(VOICE.ceiling(), { beep: 'low', vib: [150, 100, 150], key: 'ceil', minGapSec: 180 }); else if (lt2 && z === 'above') A?.cue(T.kind === 'vo2' ? VOICE.vo2_high() : T.kind === 'tempo' ? VOICE.tempo_high() : VOICE.lt2_ceiling(), { beep: 'low', vib: [150, 100, 150], key: 'ceil2', minGapSec: 240 }); else A?.cue(z === 'above' ? VOICE.zone_high() : VOICE.zone_low(), { beep: z === 'above' ? 'low' : 'high', vib: [150, 100, 150], key: 'zone', minGapSec: 60 }); } }
     this.zoneState = grace && lt2 ? 'waiting' : z;
     if (this.mode === 'lt1' && this.settings.alpha1?.guidance !== 'off' && Number.isFinite(rec.alpha1) && T.alphaMin) {
       if (rec.alpha1 < T.alphaMin) { if (!this.alphaLowSince) this.alphaLowSince = now; if ((now - this.alphaLowSince) / 1000 >= 60) A?.cue(VOICE.alpha_low(), { beep: 'low', key: 'alpha', minGapSec: 120 }); }
@@ -338,6 +344,7 @@ export class SessionEngine {
       id: this.sessionId, type: this.mode, startedAt: this.startedAt, endedAt: final ? this.endedAt : null, final: !!final,
       sourceKind: this.source?.kind || 'unknown', protocol: this.mode === 'test' ? { ...this.protocol } : null, intervals: this.mode === 'lt2' ? { ...this.intervals } : null, targets: this.targets,
       laps: this.mode === 'verify' ? { ...this.laps, ...this.lapTimes } : null, purpose: this.mode === 'verify' ? (this.meta?.purpose || 'lt1') : undefined,
+      split: this.mode === 'test' && Array.isArray(this.meta?.splitStages) ? { part: Number.isFinite(this.meta.splitPart) ? this.meta.splitPart : null, measure: this.meta.splitStages.slice(), last: Number.isFinite(this.meta.splitLast) ? this.meta.splitLast : null } : undefined, // v1.1.44: a part of the split step test
       alpha1Settings: { ...(this.settings.alpha1 || {}) }, speed: this.meta?.speed ?? null, incline: this.meta?.incline ?? null, surface: this.mode === 'test' ? 'treadmill' : (this.meta?.surface || 'treadmill'), // v1.1.36: where it was run (only a motorized belt gives a usable speed)
       rr: this.rr, features: this.features, hrLive: this.hrLive, stages: this.stages.map(s => ({ ...s })), events: this.events, tiz: { ...this.tiz }, pauseMs: this.pauseAccum + (!final && this.paused ? Math.max(0, this.now() - this.pauseStartedAt) : 0), // an autosave taken during a pause counts the pause so far
     };

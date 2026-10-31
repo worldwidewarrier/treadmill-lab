@@ -115,6 +115,10 @@ node test/ui_places.mjs            # v1.1.36 in the UI: the place under each wee
 node test/ui_measured.mjs          # a measured result on record (the 10/11 check rebuilt): next test speed on Home / Plan / setup / live banner, speeds unchanged after one pass and +0.2 after the band change, the multi-day curve around LT1 (no LT2, apply closed, the reason)
 node test/ui_desc.mjs              # each session's description behind its title (Home, Plan, every setup card): closed, opens on a tap, stays open across repaints
 node test/ui_enfirst.mjs           # language "English + 한국어": English on top on every tab, setup card, the live screen and a dialog; back to Korean first without a reload
+node test/test_split.mjs           # v1.1.44: the split step test (parts 1–3: stages run / sampled, the engine's skip + auto-end, the merged curve, a late-typed value), the same-speed trend verdicts, the week's Saturday kinds, the tempo targets, the calendar kinds
+node test/ui_split.mjs             # v1.1.44 in the UI: Home's Saturday opens the part, the part picker, a demo run of part 2 (samples only at stages 3–4), the saved card, the Analysis tab's merged-curve card
+node test/ui_quota.mjs             # v1.1.44 in the UI: the weekday quota (jog 1 · strength 1 · optional session opt-in), Home's pick day by day, the Saturday split test, the Sunday / Monday review
+node test/ui_log.mjs               # the exercise log: barbell rows on Saturday, bodyweight rows while the strength quota lasts, next targets
 ```
 
 Tests that need the owner's private exports skip those parts when the files are absent (`test/data/README.md`). Screenshots go to `$TL_SHOTS` (default: a temp folder).

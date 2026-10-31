@@ -13,6 +13,6 @@ check('Home: a Start button (disabled on a rest day)', !!(await page.$('#view [d
 check('Home: 「오늘 체크」 with at least one row', await page.$$eval('.chk-row', r => r.length) >= 1);
 await page.click('#nav button[data-view=plan]'); await page.waitForSelector('.plan-day');
 check('Plan: no description blocks', await page.$$eval('#view details', d => d.length) === 0);
-check('Plan: seven days', await page.$$eval('.plan-day', d => d.length) === 7);
+check('Plan: four rows — Mon–Thu quota, Fri, Sat, Sun (v1.1.44)', await page.$$eval('.plan-day', d => d.length) === 4);
 check('no page errors', errors.length === 0, errors.join(' | '));
 await browser.close(); process.exit(fails ? 1 : 0);

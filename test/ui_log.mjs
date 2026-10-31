@@ -20,7 +20,8 @@ ck('squat next 65', await ph('squat')==='65'); ck('ohp same 40 (not done)', awai
 await go('2026-11-09T07:00:00+09:00'); // Mon — easy; flag uses last RPE 6
 await p.fill('.ex-val[data-id=bw_chin]','5'); await p.dispatchEvent('.ex-val[data-id=bw_chin]','change'); await p.waitForTimeout(300);
 ck('RPE flag shown on easy day', !!(await p.$('.notice.warn')));
-await go('2026-11-10T07:00:00+09:00'); ck('chin-up next 6', await ph('bw_chin')==='6');
+await go('2026-11-10T07:00:00+09:00'); ck('Tue: strength quota (1) met → no bodyweight rows', !(await p.$('.ex-val[data-id=bw_chin]'))); // v1.1.44: one bodyweight set a week by default
+await go('2026-11-16T07:00:00+09:00'); ck('chin-up next 6 (next week)', await ph('bw_chin')==='6');
 await go('2026-10-31T09:00:00+09:00'); ids=await p.$$eval('.chk-tap',r=>r.map(x=>x.dataset.id)); ck('Sat stairs row', ids.includes('stairs')); ck('stairs start 10', await ph('stairs')==='10');
 await p.click('.chk-tap[data-id=stairs]'); await p.waitForTimeout(300);
 await go('2026-11-07T09:00:00+09:00'); ck('stairs next 15', await ph('stairs')==='15');
