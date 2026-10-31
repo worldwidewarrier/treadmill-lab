@@ -30,7 +30,8 @@ const before = await page.evaluate(() => ({ kind: TL.detail.sourceKind, hr: TL.d
 check('the demo recording: source demo, a made-up heart rate, speed 8.9; the card offers the conversion and says why', before.kind === 'demo' && before.hr > 100 && before.speed === 8.9 && before.btn && /가짜/.test(before.txt), JSON.stringify({ ...before, txt: undefined }));
 await shot('60-demo-card');
 await page.click('#nav button[data-view=home]'); await page.waitForSelector('#view .card'); await page.waitForTimeout(300);
-check('Home before: the demo run is not counted (weekly check still at the LT1 speed 8.7, no result)', /8\.7 km\/h/.test(await weekly()) && !/10\/1\d, 8\.9/.test(await weekly()), (await weekly()).slice(0, 140));
+const bfk = () => page.evaluate(() => TL.bandFinder ? TL.bandFinder.ko : ''); // (v1.1.37+: Home shows the weekly card only with a band change — the band finder's text is read directly)
+check('Home before: the demo run is not counted (the band finder still at the LT1 speed 8.7, no result)', /8\.7 km\/h/.test(await bfk()) && !/10\/1\d, 8\.9/.test(await bfk()) && !/경계/.test(await bfk()), (await bfk()).slice(0, 140));
 await page.click('#nav button[data-view=analysis]'); await page.waitForSelector('#view'); await page.click('.list-item[data-action=open-session]'); await page.waitForSelector('[data-action=to-nostrap]');
 await page.click('[data-action=to-nostrap]'); await page.waitForSelector('.modal [data-x=yes]'); await page.click('.modal [data-x=yes]');
 await page.waitForFunction(() => TL.detail && TL.detail.sourceKind === 'nostrap', null, { timeout: 5000 }); await page.waitForTimeout(300);
@@ -40,8 +41,8 @@ check('  the verdict: borderline at 8.9, judged on lactate only, no "목표 심�
 check('  the card says "No strap — lactate only", and no NaN anywhere', /스트랩 없음 — 젖산만으로 판정/.test(after.txt) && !/NaN/.test(after.txt) && /심박 기록 없음/.test(after.txt));
 await shot('61-converted-card');
 await page.click('#nav button[data-view=home]'); await page.waitForSelector('#view .card'); await page.waitForTimeout(300);
-const w = await weekly();
-check('Home after: the weekly check counts it — latest 8.9 borderline → this week 8.9', /경계/.test(w) && /8\.9 km\/h/.test(w), w.slice(0, 200));
+const w = await bfk();
+check('Home after: the band finder counts it — latest 8.9 borderline → this week 8.9', /경계/.test(w) && /8\.9 km\/h/.test(w), w.slice(0, 200));
 check('  no zone changed by it (LT1 143 @ 8.7)', await page.evaluate(() => TL.settings.zones.lt1Hr === 143 && TL.settings.zones.lt1Speed === 8.7));
 await shot('62-home-weekly');
 

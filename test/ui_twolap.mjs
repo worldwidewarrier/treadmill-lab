@@ -26,15 +26,16 @@ const again = await page.evaluate(async () => { const { store } = await import('
 check('the fixes run once: a second load changes nothing', again.z === 143 && again.at === mig.removed.at);
 // ---- 2. Home: the weekly check card (no result yet → the LT1 speed), the plan's Thursday
 let home = await text();
-check('Home shows the weekly LT1 check with the test speed 8.7 km/h and a way into the two-lap mode', /주간 LT1 검증/.test(home) && /8\.7 km\/h/.test(home) && !!(await page.$('[data-action=go-live][data-mode=verify]')), home.slice(0, 80));
-await page.evaluate(async () => { TL.settings.plan.calendar = ''; await TL.saveSettings(); }); // (a plain week: the default calendar's 10/19 week is the MLSS weekend)
+const bfk = () => page.evaluate(() => TL.bandFinder ? TL.bandFinder.ko : '');
+check('Home: no weekly card without a band change (v1.1.37+); the band finder proposes the LT1 speed 8.7 km/h for the next check', !/주간 LT1 검증/.test(home) && !(await page.$('[data-action=go-live][data-mode=verify]')) && /8\.7 km\/h/.test(await bfk()), (await bfk()).slice(0, 80));
+await page.evaluate(async () => { const d = new Date(); d.setHours(12, 0, 0, 0); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); const mon = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; Object.assign(TL.settings.plan, { startDate: mon, calendar: `${mon} lt1`, weekOffset: 0 }); await TL.saveSettings(); }); // (v1.1.44: the two-lap check is the lt1 calendar kind; a plain week's Saturday is the fixed-speed test / 4×4)
 await page.click('#nav button[data-view=plan]'); await page.waitForSelector('.plan-day'); const plan = await text();
-check('Plan: Saturday (v1.1.36) is the two-lap verification run at 8.7 km/h, with the procedure note; the long run samples only at the end, every other week (v1.1.35)', /LT1 검증 달리기 \(두 랩, 8\.7 km\/h\)/.test(plan) && /간격 60–90초/.test(plan) && !/30:00에 중간 채혈/.test(plan) && /(종료 채혈 1회|채혈 없음\(격주\))/.test(plan), plan.slice(0, 120));
+check('Plan, an lt1 week: Saturday is the two-lap verification run at 8.7 km/h', /LT1 검증 달리기 \(두 랩, 8\.7 km\/h\)/.test(plan), plan.slice(0, 120));
 await shot('40-plan-thursday');
 // ---- 3. the two-lap run with the demo strap: warm-up 1 min, lap 1 2 min, lap 2 3 min at ×60
 await page.click('#nav button[data-view=live]'); await page.waitForSelector('#mode-seg'); await page.click('#mode-seg button[data-mode=verify]'); await page.waitForSelector('#lap-1');
 const setup = await page.evaluate(() => ({ speed: document.getElementById('sess-speed').value, lap1: document.getElementById('lap-1').value, lap2: document.getElementById('lap-2').value, txt: document.getElementById('view').textContent }));
-check('setup card: test speed 8.7 (the LT1 speed), lap 1 10 min, lap 2 30 min, the line 0.8 + 0.5 = 1.3, the checklist', setup.speed === '8.7' && setup.lap1 === '10' && setup.lap2 === '30' && /0\.8 \+ 0\.5 = 1\.3/.test(setup.txt) && /첫 방울 닦기/.test(setup.txt), JSON.stringify([setup.speed, setup.lap1, setup.lap2]));
+check('setup card: test speed 8.7 (the LT1 speed), lap 1 10 min, lap 2 30 min (the line and the checklist are in the description, gone since v1.1.37)', setup.speed === '8.7' && setup.lap1 === '10' && setup.lap2 === '30', JSON.stringify([setup.speed, setup.lap1, setup.lap2]));
 await page.click('#purpose-seg button[data-purpose=mlss]'); await page.waitForSelector('#lap-2'); const mlss = await page.evaluate(() => ({ lap2: document.getElementById('lap-2').value, speed: document.getElementById('sess-speed').value }));
 check('MLSS variant: lap 2 = 20 min, speed = the LT2 speed 10.5', mlss.lap2 === '20' && mlss.speed === '10.5', JSON.stringify(mlss));
 await page.click('#purpose-seg button[data-purpose=lt1]'); await page.waitForSelector('#lap-2');
@@ -81,7 +82,7 @@ await page.evaluate(async () => { const { store } = await import('./js/store.js'
     return { id, type: 'verify', final: true, sourceKind: 'ble', startedAt: S(0), endedAt: S(2840), speed, incline: 1, purpose: 'lt1', laps: { warmupSec: 300, lap1Sec: 600, lap2Sec: 1800, gapCapSec: 180, sampleAtSec: 30 }, hrLive, features: [], events, metrics: { durationSec: 2840, meanHr: hr } }; };
   await store.putSession(mk('wk1', 8.7, 1.0, 1.3, 14)); await store.putSession(mk('wk2', 8.9, 1.0, 1.4, 7)); });
 await page.click('#nav button[data-view=home]'); await page.waitForSelector('[data-action=apply-band]', { timeout: 8000 }); home = await text();
-check('Home after two passes (8.7, 8.9): this week 9.0 km/h (capped at 8.7 + 0.3), "pass 2 checks running", the band change LT1 8.7→8.9 offered', /9\.0 km\/h/.test(home) && /통과 2회 연속/.test(home) && /8\.7→8\.9 km\/h/.test(home), home.slice(0, 200));
+check('Home after two passes (8.7, 8.9): this week 9.0 km/h (capped at 8.7 + 0.3), the band change LT1 8.7→8.9 offered; the band finder says "통과 2회 연속"', /9\.0 km\/h/.test(home) && /통과 2회 연속/.test(await bfk()) && /8\.7→8\.9 km\/h/.test(home), home.slice(0, 200));
 await shot('44-home-band');
 await page.click('[data-action=apply-band]'); await page.waitForTimeout(500);
 const z = await page.evaluate(() => TL.settings.zones);
@@ -96,8 +97,8 @@ const today = new Date().toISOString().slice(0, 10); const rl = await page.evalu
 check('a new resting value dates itself today', rl.v === 0.9 && rl.at === today && rl.field === today, JSON.stringify(rl));
 await page.$eval('[data-set="profile.restLactate"]', el => el.blur()); await page.waitForTimeout(300); // (the browser fires its own change on blur after a fill: let it, then date the baseline 40 days back)
 await page.evaluate(async () => { TL.settings.profile.restLactateAt = new Date(Date.now() - 40 * 86400000).toISOString().slice(0, 10); await TL.saveSettings(); });
-await page.click('#nav button[data-view=home]'); await page.waitForFunction(() => /측정 후 \d+일/.test(document.getElementById('view').textContent), null, { timeout: 8000 }).catch(() => {}); home = await text();
-check('Home reminds to re-measure the baseline when it is 40 days old', /측정 후 (39|40|41)일/.test(home), home.match(/안정 시 젖산[^.]*/)?.[0] || home.slice(0, 300));
+const rem = await page.evaluate(async () => { const { assessRecent } = await import('./js/prescribe.js'); const { store } = await import('./js/store.js'); return assessRecent(await store.listSessions(), TL.settings.zones, TL.settings.zones.updatedAt, { restLactateAt: TL.settings.profile.restLactateAt }).notes.map(n => n.ko).join(' | '); });
+check('the insights remind to re-measure the baseline when it is 40 days old (assessRecent; Home has not shown the notes since v1.1.37)', /측정 후 (39|40|41)일/.test(rem), rem.match(/안정 시 젖산[^.]*/)?.[0] || rem.slice(0, 300));
 await shot('45-home-rest-reminder');
 console.log('errors:', errors.length ? errors : 'none');
 await browser.close(); console.log(fails ? `\n${fails} FAILED` : '\nALL PASS'); process.exit(fails ? 1 : 0);

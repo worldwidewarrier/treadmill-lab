@@ -63,6 +63,7 @@ export const VOICE = {
   stage_start: (n, speed, incline) => `${n}단계. 시속 ${speed} 킬로미터${incline ? `, 경사 ${incline}퍼센트` : ''}.`,
   stage_warn: (sec) => `${sec}초 후 채혈 정지.`,
   stage_end: () => '정지. 채혈하세요.',
+  stage_end_skip: (last) => (last ? '정지. 채혈 없음. 30초 뒤 종료.' : '정지. 채혈 없음. 30초 뒤 다음 단계.'), // v1.1.44: an unmeasured stage of the split step test
   free_cue: (min) => `${min}분 경과. 벨트를 멈추고 채혈하세요.`,
   pause_warn: (sec) => `${sec}초 후 다음 단계.`,
   resume: (n, speed) => `${n}단계 시작. 시속 ${speed} 킬로미터.`,
@@ -103,6 +104,7 @@ export const VOICE = {
   // LT2 ladder (v1.1.35): the ceiling after minute 10 of a rep drifts up; heart rate alone never cuts the speed — RPE and lactate do
   lt2_ceiling: () => '심박 천장 위. RPE 7 이상이면 다음 구간 0.3 느리게. 아니면 유지.',
   vo2_high: () => '심박 95퍼센트 위. 속도 유지, 마지막 구간을 못 끝내면 다음엔 0.3 느리게.',
+  tempo_high: () => '존3 위. 조금 늦추세요.', // v1.1.44: the weekday tempo
   // step test (v1.1.35): lactate 6 is a floor, not the end — the end point is two stages past the 4-mmol point or the heart-rate criterion
   lactate_floor: (n) => `젖산 6 이상. 종료는 4 지점에서 두 단계 뒤, 또는 심박 기준. ${n}단계 더.`,
 };

@@ -23,25 +23,28 @@ const setWeek = kind => page.evaluate(async kind => { const d = new Date(); d.se
 const planDays = async () => { await page.click('#nav button[data-view=home]'); await page.click('#nav button[data-view=plan]'); await page.waitForSelector('.plan-day'); return page.evaluate(() => [...document.querySelectorAll('.plan-day')].map(r => ({ wu: r.querySelector('.wu-line')?.textContent ?? null, nums: r.querySelector('.mono')?.textContent ?? '', run: (c => { c.querySelectorAll('.eve').forEach(e => e.remove()); return c.textContent; })(r.children[1].cloneNode(true)) }))); }; // Mon … Sun; run = the day's running lines (not the noon / evening exercise; since v1.1.27 they sit behind the title)
 const EASY = '워밍업 5분 · 7.0 km/h', LADDER = '워밍업 10분 · 7.5 → 8.5(4:00) → 9.5(7:00) km/h', CHECK = '워밍업 5분 · 걷기 5.5 → 7.0(0:30) km/h', MLSS = '워밍업 5분 · 7.5 → 8.5(2:00) km/h', STEP = '워밍업 5분 · 걷기 5.5 km/h';
 await setWeek(''); let days = await planDays(); let rows = days.map(d => d.wu);
-check('Plan, a ladder week (v1.1.36): the unit days (Mon–Fri: track, hill, non-motorized) have no belt warm-up line · Saturday\'s two-lap check walk 5.5 → 7.0 · Sunday\'s long run 7.0', JSON.stringify(rows) === JSON.stringify([null, null, null, null, null, CHECK, EASY]), JSON.stringify(rows));
-check('Plan: the place is under the weekday (v1.1.36); the belt days name one speed — check 8.7, long run 7.5; the track ladder 10.5 with its 400-m pace 2:17; the unit easy days a heart rate only', /^128–133 bpm$/.test(days[0].nums) && /^154–160 bpm · 10\.5 km\/h · 400 m 2:17/.test(days[1].nums) && /^133–140 bpm$/.test(days[3].nums) && /^133–140 bpm · 8\.7 km\/h$/.test(days[5].nums) && /^133–140 bpm · 7\.5 km\/h$/.test(days[6].nums), JSON.stringify(days.map(d => d.nums)));
+// v1.1.44: four rows — Mon–Thu (the weekday quota at the unit: heart rate only, no belt warm-up) · Fri (rest) · Sat (the quality / test session on the belt) · Sun (the long run on the belt)
+check('Plan, week 1 (v1.1.44): no belt warm-up line for Mon–Thu or Fri · Saturday\'s fixed-speed test 7.5 → 8.5 at 2:00 · Sunday\'s long run 7.0', JSON.stringify(rows) === JSON.stringify([null, null, MLSS, EASY]), JSON.stringify(rows));
+check('Plan: the belt days name one speed — the fixed-speed test 10.5, the long run 7.5; the weekday row a heart rate only', /^133–140 bpm$/.test(days[0].nums) && days[1].nums === '' && /^154–160 bpm · 10\.5 km\/h$/.test(days[2].nums) && /^133–140 bpm · 7\.5 km\/h$/.test(days[3].nums), JSON.stringify(days.map(d => d.nums)));
 check('Plan: no running line gives a speed as a range', days.every(d => !RANGE.test(d.run)), days.filter(d => RANGE.test(d.run)).map(d => (d.run.match(/.{0,25}\d\.\d\s*[–-]\s*\d+\.\d\s*km\/h/) || d.run.match(/.{0,25}\d\.\d에서 \d/))[0]).join(' | '));
 await noToast(); await shot('60-plan-warmup');
-const todayIdx = await page.evaluate(() => (new Date().getDay() + 6) % 7);
+const todayIdx = await page.evaluate(() => (new Date().getDay() + 6) % 7); const rowIdx = todayIdx <= 3 ? 0 : todayIdx - 3; // Mon–Thu → row 0, Fri 1, Sat 2, Sun 3
 await page.click('#nav button[data-view=home]'); await page.waitForSelector('#view .card');
-if (!rows[todayIdx]) { const h = await page.evaluate(() => ({ wu: !!document.getElementById('home-warmup'), text: document.getElementById('view').textContent })); check('Home on a unit day (or rest): no belt warm-up line, the place on the numbers line (v1.1.36)', !h.wu && (/부대/.test(h.text) || /휴식/.test(h.text)), String(todayIdx)); }
+if (!rows[rowIdx]) { const h = await page.evaluate(() => ({ wu: !!document.getElementById('home-warmup'), text: document.getElementById('view').textContent })); check('Home on a unit day (or rest): no belt warm-up line, the place on the numbers line (v1.1.36)', !h.wu && (/부대/.test(h.text) || /휴식/.test(h.text)), String(todayIdx)); }
 else {
-const home = await page.evaluate(() => { const w = document.getElementById('home-warmup'), card = w.closest('.card'); return { wu: w.textContent, nums: w.previousElementSibling.textContent, head: card.querySelector('.small.muted').getBoundingClientRect().height, lh: parseFloat(getComputedStyle(card.querySelector('.small.muted')).lineHeight) || 18, speed: card.querySelector('[data-action=go-live]')?.dataset.speed ?? null, text: card.textContent }; });
-check('Home: today\'s card has the same warm-up line as today\'s row of the plan, under a line with one speed', home.wu === rows[todayIdx] && !RANGE.test(home.nums) && / km\/h$/.test(home.nums), `${home.nums} / ${home.wu}`);
-check('Home: the Start button carries that speed into the session, and the day / week line is one line', home.speed != null && home.nums.endsWith(`${(+home.speed).toFixed(1)} km/h`) && home.head < 2 * home.lh, `data-speed ${home.speed}, head ${home.head}px`);
+const home = await page.evaluate(() => { const w = document.getElementById('home-warmup'), card = w.closest('.card'); return { wu: w.textContent, nums: w.previousElementSibling.textContent, head: card.querySelector('.mono').getBoundingClientRect().height, lh: parseFloat(getComputedStyle(card.querySelector('.mono')).lineHeight) || 18, speed: card.querySelector('[data-action=go-live]')?.dataset.speed ?? null, text: card.textContent }; });
+check('Home: today\'s card has the same warm-up line as today\'s row of the plan, under a line with one speed', home.wu === rows[rowIdx] && !RANGE.test(home.nums) && / km\/h$/.test(home.nums), `${home.nums} / ${home.wu}`);
+check('Home: the Start button carries that speed into the session', home.speed != null && home.nums.endsWith(`${(+home.speed).toFixed(1)} km/h`), `data-speed ${home.speed}`);
 }
 await noToast(); await shot('61-home-warmup');
 await setWeek('mlss'); rows = (await planDays()).map(d => d.wu);
-check('Plan, an MLSS-check week (v1.1.36): Saturday 7.5 → 8.5 at 2:00, Tuesday at the unit, Sunday an easy run 7.0', rows[5] === MLSS && rows[1] === null && rows[6] === EASY, JSON.stringify(rows));
+check('Plan, an MLSS / fixed-speed week: Saturday 7.5 → 8.5 at 2:00, the weekdays at the unit, Sunday the long run 7.0', rows[2] === MLSS && rows[0] === null && rows[3] === EASY, JSON.stringify(rows));
 await setWeek('step'); rows = (await planDays()).map(d => d.wu);
-check('Plan, a step-test week: Saturday is the 5-min walk at 5.5', rows[5] === STEP, JSON.stringify(rows));
+check('Plan, a step-test week: Saturday is the 5-min walk at 5.5', rows[2] === STEP, JSON.stringify(rows));
+await setWeek('split2'); rows = (await planDays()).map(d => d.wu);
+check('Plan, a split-step-test week: Saturday is the 5-min walk at 5.5 too', rows[2] === STEP, JSON.stringify(rows));
 await setWeek('blood'); rows = (await planDays()).map(d => d.wu);
-check('Plan, a blood-test week: Thursday has no run and no warm-up line, Tuesday an easy run at the unit, the Saturday check stays', rows[3] === null && rows[1] === null && rows[5] === CHECK, JSON.stringify(rows));
+check('Plan, a blood-test week: the weekday row has no warm-up line, the Saturday session stays', rows[0] === null && rows[2] === MLSS, JSON.stringify(rows));
 await setWeek('');
 
 // ---- 2. live: the banner ----
@@ -144,7 +147,7 @@ await stop();
 // step test: the walk
 st = await start('test', 10);
 s = await snap(10);
-check('step test warm-up: "워밍업 걷기" 5.5, next stage 1 at 6.0 from 5:00; the phase card names the phase', warm(s) && s.speed === '5.5' && /^워밍업 걷기/.test(s.text) && s.next === '5:00부터 1단계 6.0 km/h' && s.lbl === '워밍업', JSON.stringify(s));
+check('step test warm-up: "워밍업 걷기" 5.5, next stage 1 at 8.0 from 5:00 (the 10/31 protocol: 8.0 + 1.0); the phase card names the phase', warm(s) && s.speed === '5.5' && /^워밍업 걷기/.test(s.text) && s.next === '5:00부터 1단계 8.0 km/h' && s.lbl === '워밍업', JSON.stringify(s));
 await page.click('#lv-lap'); s = await snapWhen(`TL.engine.phase === 'work' && !/warm/.test(document.getElementById('lv-zone').className)`);
 check('step test, stage 1 started: the banner is the stage again', !warm(s) && s.speed === null && /단계 1/.test(s.text), JSON.stringify(s));
 await stop();
@@ -173,13 +176,13 @@ const tgt = await page.evaluate(() => { const p = document.querySelector('#view 
 check('…and its target is one line', tgt.h < 2 * tgt.lh, JSON.stringify(tgt));
 await noToast(); await shot('65-setup-lt1-warmup');
 await mode('lt2'); c = await card();
-check('ladder setup card: the ramp with its times, target 154–160 bpm · 10.5 km/h, recovery jog 6.5, no range', await line() === '워밍업 10분: 7.5 → 8.5(4:00) → 9.5(7:00) km/h' && /154–160 bpm · 10\.5 km\/h/.test(c) && /회복 조깅 6\.5 km\/h/.test(c) && !RANGE.test(c), `${await line()} | ${(c.match(/.{0,25}\d\.\d\s*[–-]\s*\d+\.\d\s*km\/h/) || [''])[0]}`);
+check('ladder setup card: the ramp with its times, target 154–160 bpm · 10.5 km/h, no range (the description is gone since v1.1.37)', await line() === '워밍업 10분: 7.5 → 8.5(4:00) → 9.5(7:00) km/h' && /154–160 bpm · 10\.5 km\/h/.test(c) && !RANGE.test(c), `${await line()} | ${(c.match(/.{0,25}\d\.\d\s*[–-]\s*\d+\.\d\s*km\/h/) || [''])[0]}`);
 await page.fill('#lt2-wu', '12'); check('…12 min typed: the times move with it (6:00, 9:00), before the field is left', await line() === '워밍업 12분: 7.5 → 8.5(6:00) → 9.5(9:00) km/h', await line());
 await page.fill('#lt2-wu', '5'); check('…5 min: no ramp, 7.5', await line() === '워밍업 5분: 7.5 km/h', await line());
 await page.fill('#lt2-wu', '0'); check('…0 min: the line is hidden', await line() === '(hidden)', await line());
 await page.fill('#lt2-wu', '10'); check('…10 min again', await line() === '워밍업 10분: 7.5 → 8.5(4:00) → 9.5(7:00) km/h' && await page.evaluate(() => TL.live.lt2.warmupSec) === 600, await line());
 await mode('verify'); await page.click('#purpose-seg button[data-purpose=lt1]'); await page.waitForSelector('#purpose-seg button.active[data-purpose=lt1]'); c = await card();
-check('two-lap setup card: walk 5.5 → 7.0 at 0:30, no range (checklist included)', await line() === '워밍업 5분: 걷기 5.5 → 7.0(0:30) km/h' && /4:30 7\.0 km\/h/.test(c) && !RANGE.test(c), `${await line()} | ${(c.match(/.{0,25}\d\.\d\s*[–-]\s*\d+\.\d\s*km\/h/) || [''])[0]}`);
+check('two-lap setup card: walk 5.5 → 7.0 at 0:30, no range', await line() === '워밍업 5분: 걷기 5.5 → 7.0(0:30) km/h' && !RANGE.test(c), `${await line()} | ${(c.match(/.{0,25}\d\.\d\s*[–-]\s*\d+\.\d\s*km\/h/) || [''])[0]}`);
 await page.click('#purpose-seg button[data-purpose=mlss]'); await page.waitForSelector('#purpose-seg button.active[data-purpose=mlss]');
 check('…MLSS variant: 7.5 → 8.5 at 2:00', await line() === '워밍업 5분: 7.5 → 8.5(2:00) km/h', await line());
 await page.fill('#lap-wu', '1'); check('…1-min warm-up: 7.5 only', await line() === '워밍업 1분: 7.5 km/h', await line());

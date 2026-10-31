@@ -15,9 +15,12 @@ check('a fresh install gets the calendar with the MLSS check on Sun 10/25 and th
 await page.evaluate(async () => { const d = new Date(); d.setHours(12, 0, 0, 0); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); const mon = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; Object.assign(TL.settings.plan, { startDate: mon, calendar: '', weekOffset: 0 }); await TL.saveSettings(); });
 await page.click('#nav button[data-view=plan]'); await page.waitForSelector('.plan-day');
 const tags = await page.evaluate(() => [...document.querySelectorAll('.plan-day .dow .place-tag')].map(e => e.textContent));
-check('Plan: every day names its place under the weekday — Mon 부대 · Tue 트랙 · Wed–Fri 부대 · Sat/Sun 헬스장', tags.join() === '부대,트랙,부대,부대,부대,헬스장,헬스장', tags.join());
-const sat = await page.evaluate(() => [...document.querySelectorAll('.plan-day')][5].textContent);
-check('Plan: Saturday = the two-lap check at the gym 09:00, with the optional StairMaster after it', /LT1 검증 달리기/.test(sat) && /헬스장 09:00/.test(sat) && /천국의 계단/.test(sat), sat.slice(0, 120));
+// v1.1.44: four rows — Mon–Thu (the weekday quota, at the unit) · Fri · Sat · Sun
+check('Plan: every row names its place — Mon–Thu 부대 · Fri 부대 · Sat/Sun 헬스장', tags.join() === '부대,부대,헬스장,헬스장', tags.join());
+const wk = await page.evaluate(() => [...document.querySelectorAll('.plan-day')][0].textContent);
+check('Plan: Mon–Thu = the weekday quota (jog 20 min × 1 · bodyweight set × 1 · no optional session by default)', /평일 할당 — 쉬운 조깅 20분 × 1 · 맨몸 근력 1세트 × 1 · 선택 세션 없음/.test(wk), wk.slice(0, 120));
+const sat = await page.evaluate(() => [...document.querySelectorAll('.plan-day')][2].textContent);
+check('Plan: Saturday (week 1, threshold type) = the fixed-speed test at the gym, at the LT2 speed', /고정 속도 검사 30분 @ 10\.5 km\/h/.test(sat) && /헬스장/.test(sat), sat.slice(0, 120));
 
 // ---- a run at the unit: by heart rate, no speed banner, recorded as off the belt
 await page.click('#nav button[data-view=live]'); await page.waitForSelector('#mode-seg'); await page.click('#mode-seg button[data-mode=lt1]'); await page.waitForSelector('#sess-surface');

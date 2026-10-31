@@ -82,18 +82,18 @@ check('the same file is not stored twice in the imports', da.imports === 1 && da
 // ---- manual thresholds → Home and Plan ----
 await page.click('#nav button[data-view=settings]'); await page.waitForSelector('[data-set="zones.lt1Hr"]');
 for (const [k, v] of [['zones.lt1Hr', '140'], ['zones.lt1Speed', '8.4'], ['zones.lt2Hr', '157'], ['zones.lt2Speed', '10.5']]) { await page.fill(`[data-set="${k}"]`, v); await page.$eval(`[data-set="${k}"]`, el => el.dispatchEvent(new Event('change', { bubbles: true }))); await page.waitForTimeout(120); }
-await page.click('#nav button[data-view=home]'); await page.waitForSelector('.thr-card');
+await page.click('#nav button[data-view=analysis]'); await page.waitForSelector('.list-item[data-action=open-session]'); // (v1.1.37+: Home has no last-session card; the list is on the Analysis tab)
 const lastCard = (await page.textContent('[data-action=open-session]')).replace(/\s+/g, ' ');
-check('Home: the last-session card shows its heart rate, and no α1 while α1 guidance is off (default)', /HR 1[34]\d/.test(lastCard) && !/α1/.test(lastCard), lastCard.slice(0, 80));
+check('Analysis: the last-session item shows its heart rate, and no α1 while α1 guidance is off (default)', /HR 1[34]\d/.test(lastCard) && !/α1/.test(lastCard), lastCard.slice(0, 80));
 // α1 guidance back on (Settings → α1): the α1 figures return; then off again for the rest of the run
-await page.evaluate(async () => { TL.settings.alpha1.guidance = 'on'; await TL.saveSettings(); TL.navigate('home'); }); await page.waitForSelector('.thr-card');
+await page.evaluate(async () => { TL.settings.alpha1.guidance = 'on'; await TL.saveSettings(); TL.navigate('home'); TL.navigate('analysis'); }); await page.waitForSelector('.list-item[data-action=open-session]');
 const lastOn = (await page.textContent('[data-action=open-session]')).replace(/\s+/g, ' ');
 check('…with α1 guidance on, the card shows α1 again', /HR 1[34]\d · α1 \d\.\d\d/.test(lastOn), lastOn.slice(0, 80));
 await page.evaluate(async () => { TL.settings.alpha1.guidance = 'off'; await TL.saveSettings(); });
-const home = await page.textContent('#view'); check('Home shows the manual thresholds and a session for today', /140\s*bpm/.test(home) && /157\s*bpm/.test(home) && /8\.4 km\/h/.test(home) && /manual/.test(home), home.replace(/\s+/g, ' ').slice(0, 110));
+await page.click('#nav button[data-view=home]'); await page.waitForSelector('#view .card h3'); const home = await page.textContent('#view'); check('Home shows a session for today from the manual thresholds (140 @ 8.4 / 157 @ 10.5: the easy band 133–140 or the long run 7.8)', /1[34]\d–1[34]\d bpm/.test(home) && /(쉬운 런|롱런|Long run|Easy run|휴식|Rest)/.test(home), home.replace(/\s+/g, ' ').slice(0, 110));
 await page.click('#nav button[data-view=plan]'); await page.waitForSelector('.plan-day');
 const plan = await page.evaluate(() => ({ days: document.querySelectorAll('.plan-day').length, zones: document.querySelectorAll('.zone-item').length, note: document.querySelector('#view .card p.small.muted')?.textContent.slice(0, 60), z2: [...document.querySelectorAll('.zone-item')][1]?.textContent.replace(/\s+/g, ' ') }));
-check('Plan: 7 days, 5 zones, footnote in minutes', plan.days === 7 && plan.zones === 5 && /\+10분/.test(plan.note), JSON.stringify(plan));
+check('Plan: 4 rows (v1.1.44), 5 zones', plan.days === 4 && plan.zones === 5, JSON.stringify(plan));
 await page.click('[data-action=week-next]'); await page.waitForTimeout(300); const wk = await page.evaluate(() => TL.settings.plan.weekOffset); await page.click('[data-action=week-prev]'); await page.waitForTimeout(300);
 check('week ‹ › buttons move and return', wk === 1 && await page.evaluate(() => TL.settings.plan.weekOffset) === 0);
 

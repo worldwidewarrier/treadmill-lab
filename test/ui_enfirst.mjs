@@ -45,20 +45,14 @@ const ta = await page.$eval('[data-set="plan.calendar"]', e => e.value);
 check('…the week calendar text (a field) is left exactly as it was', /^2026-10-12 recovery 회복주 \/ recovery week/.test(ta), ta.slice(0, 50));
 await page.click('#nav button[data-view=plan]'); await page.waitForSelector('.plan-day');
 const dow = await page.$$eval('.plan-day .dow', d => d.map(x => x.textContent.trim()));
-check('Plan: the days read Mon…Sun first, Korean under them', dow.map(x => x.replace(/(unit|track|hill|gym|부대|트랙|언덕|헬스장)$/, '')).join(',') === 'Mon월,Tue화,Wed수,Thu목,Fri금,Sat토,Sun일', dow.join(','));
-check('Plan: the footnote starts "Running … min"', /^Running \d+ min/.test(await firstText('.plan-day ~ p.small.muted, #view .card p.small.muted')));
+check('Plan: the rows read Mon–Thu … Sun first, Korean under them (v1.1.44: four rows)', dow.map(x => x.replace(/(unit|track|hill|gym|부대|트랙|언덕|헬스장)$/, '')).join(',') === 'Mon–Thu월–목,Fri금,Sat토,Sun일', dow.join(','));
+check('Plan: the header reads "Weekly plan" first', /^Weekly plan/.test(await firstText('#view h2')), await firstText('#view h2'));
 await page.click('#nav button[data-view=live]'); await page.waitForSelector('#mode-seg'); await page.click('#mode-seg button[data-mode=lt2]'); await page.waitForSelector('#lt2-reps');
 const lt2l = await page.evaluate(() => [...document.querySelectorAll('label.field')].map(l => [...l.childNodes].filter(n => n.nodeType === 3).map(n => n.data.trim()).join(' ').trim()));
 check('LT2 setup: "reps / 반복", "Interval speed km/h / 인터벌 속도 km/h", "Incline % / 경사 %"', lt2l.includes('reps / 반복') && lt2l.includes('Interval speed km/h / 인터벌 속도 km/h') && lt2l.includes('Incline % / 경사 %'), JSON.stringify(lt2l));
-await page.click('#mode-seg button[data-mode=verify]'); await page.waitForSelector('#lap-wu'); await page.click('details.desc[data-key="setup-verify"] > summary h3'); await page.evaluate(() => document.querySelectorAll('details').forEach(d => d.open = true)); await page.waitForTimeout(150);
-const vli = await page.$$eval('#view li', l => l.map(x => x.textContent.trim()));
-check('two-lap setup checklist: English first in every line', vli.length >= 5 && vli.every(t => /^[A-Za-z"(]/.test(t)), JSON.stringify(vli.filter(t => !/^[A-Za-z"(]/.test(t)).slice(0, 2)));
-await page.click('details.desc[data-key="setup-verify"] > summary h3');
-await page.click('#nav button[data-view=home]'); await page.waitForSelector('details.desc[data-key="home-today"]');
-check('Home: the day line reads "Sun / 일 · Week …" (English first)', /^[A-Z][a-z]{2} \/ [월화수목금토일]/.test(await firstText('details.desc[data-key="home-today"] .small.muted')));
-const head = await page.$eval('details.desc[data-key="home-today"] h3', h => [...h.children].map(c => `${c.className}:${c.textContent}`));
-check('Home: the title is English first ("Easy run 50 min"), Korean under it', /^ko:[A-Za-z]/.test(head[0]) && /^en:.*[가-힣]/.test(head[1]), JSON.stringify(head));
-check('Home: the description still folds behind the title', !(await page.$eval('details.desc[data-key="home-today"]', d => d.open)));
+await page.click('#nav button[data-view=home]'); await page.waitForSelector('#view .card h3');
+const head = await page.$eval('#view .card h3', h => [...h.children].map(c => `${c.className}:${c.textContent}`));
+check('Home: the title is English first ("Easy run 20 min"), Korean under it', /^ko:[A-Za-z]/.test(head[0]) && /^en:.*[가-힣]/.test(head[1]), JSON.stringify(head));
 // every setup card, then a live session from Home
 await page.click('#nav button[data-view=live]'); await page.waitForSelector('#mode-seg');
 for (const m of ['test', 'verify', 'lt1', 'lt2', 'free']) { await page.click(`#mode-seg button[data-mode=${m}]`); await page.waitForSelector(`#mode-seg button.active[data-mode=${m}]`); await page.waitForTimeout(150); const a = await audit(); check(`setup ${m}: English first, none missed`, a.wrong.length === 0 && a.missed.length === 0, JSON.stringify(a.missed.slice(0, 3))); }
@@ -80,8 +74,8 @@ const sa = await audit(); check('the saved session\'s screen: English first, non
 await page.click('#nav button[data-view=settings]'); await page.waitForSelector('[data-set="profile.lang"]'); await page.selectOption('[data-set="profile.lang"]', 'both'); await page.waitForTimeout(400);
 const back = await page.evaluate(() => ({ cls: document.documentElement.classList.contains('lang-enfirst'), nav: [...document.querySelectorAll('#nav button')].map(b => [...b.querySelectorAll('span')].filter(s => s.checkVisibility()).map(s => s.textContent).join('|')).join(','), sw: document.querySelectorAll('[data-sw]').length }));
 check('back to "한국어 + English": the tab bar is Korean again, nothing left swapped', !back.cls && back.nav === '⌂|홈,▶|세션,⌁|분석,▦|계획,⚙|설정' && back.sw === 0, JSON.stringify(back));
-await page.click('#nav button[data-view=home]'); await page.waitForSelector('details.desc[data-key="home-today"]');
-const head2 = await page.$eval('details.desc[data-key="home-today"] h3', h => h.textContent);
+await page.click('#nav button[data-view=home]'); await page.waitForSelector('#view .card h3');
+const head2 = await page.$eval('#view .card h3', h => h.textContent);
 check('…and Home is Korean first again', /^[^A-Za-z]*[가-힣]/.test(head2), head2);
 await page.click('#nav button[data-view=settings]'); await page.waitForSelector('[data-set="profile.restLactate"]');
 check('…and the Settings labels are Korean first again', await page.evaluate(() => [...document.querySelectorAll('label.field')].some(l => [...l.childNodes].some(n => n.nodeType === 3 && n.data.trim() === '안정 시 젖산 mmol/L / Resting lactate'))));
